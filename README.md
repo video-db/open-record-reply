@@ -70,6 +70,11 @@ events so the generated skill does not include the operator returning to the
 terminal, browser, or chat window.
 
 Compiled skills land in `~/.mcp-videodb/skills/<name>/SKILL.json` and `SKILL.md`.
+Every generated `SKILL.md` includes a short continuous-improvement section. It
+instructs agents to finish the user's task first, then update the skill only with
+durable learnings such as missing inputs, safer fallbacks, clearer start checks,
+or better verification. It also tells agents not to add secrets, auth tokens,
+raw logs, one-off paths, or transient coordinates.
 
 ## macOS validation flow
 

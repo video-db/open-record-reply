@@ -97,6 +97,7 @@ async def generate_skill_md(skill: dict) -> str:
         content = _strip_code_fences(content)
         content = _clean_mojibake(content)
         content = _validate_and_clean_md(content, skill)
+        content = _append_self_improvement_section(content)
         return content
     except Exception as e:
         logger.warning(f"VLM MD generation failed, using template fallback: {e}")
@@ -200,6 +201,21 @@ def _validate_and_clean_md(content: str, skill: dict) -> str:
     content = re.sub(r'\(no scene match\)', '', content, flags=re.IGNORECASE)
     content = re.sub(r'\n{3,}', '\n\n', content)
     return content.strip() + "\n"
+
+
+SELF_IMPROVEMENT_SECTION = """## Continuous Improvement
+- Complete the user's requested task first. After the task succeeds, update this skill if the run revealed a reusable improvement.
+- Add only durable guidance: missing inputs, better start-context checks, safer fallbacks, clearer verification, or tool-specific quirks that apply beyond one local machine.
+- Do not add secrets, auth tokens, private message contents, one-off local paths, transient coordinates, or raw logs. Convert local details into named inputs instead.
+- Keep edits concise, preserve the YAML frontmatter, and avoid duplicating existing instructions.
+"""
+
+
+def _append_self_improvement_section(content: str) -> str:
+    cleaned = content.strip()
+    if re.search(r"^## Continuous Improvement\s*$", cleaned, flags=re.MULTILINE):
+        return cleaned + "\n"
+    return f"{cleaned}\n\n{SELF_IMPROVEMENT_SECTION}"
 
 
 def _template_fallback(skill: dict) -> str:
@@ -306,7 +322,7 @@ def _template_fallback(skill: dict) -> str:
         lines.append("")
 
     lines.append("")
-    return "\n".join(lines)
+    return _append_self_improvement_section("\n".join(lines))
 
 
 def _build_element_description(vctx: str, expected: str, step: dict, idx: int, total: int) -> str:
