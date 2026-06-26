@@ -99,9 +99,9 @@ async def record_skill_tool(name: str, lead_in_seconds: float = 0.0) -> dict:
 
 
 @mcp.tool()
-async def stop_recording_tool() -> dict:
+async def stop_recording_tool(trim_end_seconds: float = 0.0) -> dict:
     """Stop the active recording and return its event log and VideoDB video id."""
-    return await stop_recording()
+    return await stop_recording(trim_end_seconds=trim_end_seconds)
 
 
 @mcp.tool()

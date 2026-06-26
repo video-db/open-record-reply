@@ -82,6 +82,7 @@ async def record_skill(name: str, lead_in_seconds: float = 0.0) -> dict:
     state.events_path = str(Path(state.session_dir) / "events.jsonl")
     state.recording_start_epoch_ms = int(time.time() * 1000)
     state.effective_recording_start_epoch_ms = state.recording_start_epoch_ms
+    state.effective_recording_end_epoch_ms = 0
 
     binary = _get_ax_binary_path()
     use_tcp = sys.platform == "win32"
@@ -236,9 +237,10 @@ async def record_skill(name: str, lead_in_seconds: float = 0.0) -> dict:
         raise RuntimeError(f"Recording failed: {e}")
 
 
-async def stop_recording() -> dict:
+async def stop_recording(trim_end_seconds: float = 0.0) -> dict:
     if not state.is_recording:
         raise RuntimeError("Not recording. Call record_skill() first.")
+    trim_end_seconds = max(0.0, float(trim_end_seconds or 0.0))
 
     await state.ax_client.send("stop_recording", {})
     video_id = None
@@ -266,6 +268,11 @@ async def stop_recording() -> dict:
     await state.ax_client.shutdown()
 
     recording_end_ms = int(time.time() * 1000)
+    effective_end_ms = max(
+        state.effective_recording_start_epoch_ms or state.recording_start_epoch_ms,
+        recording_end_ms - int(trim_end_seconds * 1000),
+    )
+    state.effective_recording_end_epoch_ms = effective_end_ms
     duration = (recording_end_ms - state.recording_start_epoch_ms) / 1000.0
 
     event_count = 0
@@ -288,10 +295,12 @@ async def stop_recording() -> dict:
         "video_id": video_id,
         "recording_start_epoch_ms": state.recording_start_epoch_ms,
         "effective_recording_start_epoch_ms": state.effective_recording_start_epoch_ms or state.recording_start_epoch_ms,
+        "effective_recording_end_epoch_ms": state.effective_recording_end_epoch_ms or recording_end_ms,
         "lead_in_seconds": max(
             0.0,
             ((state.effective_recording_start_epoch_ms or state.recording_start_epoch_ms) - state.recording_start_epoch_ms) / 1000.0,
         ),
+        "trim_end_seconds": trim_end_seconds,
         "recording_end_epoch_ms": recording_end_ms,
         "duration_seconds": duration,
         "platform": platform.system().lower(),

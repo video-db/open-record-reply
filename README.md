@@ -45,7 +45,7 @@ Three tools should appear:
 | Tool | Description |
 |------|-------------|
 | `record_skill_tool(name, lead_in_seconds=0)` | Start recording a workflow |
-| `stop_recording_tool()` | Stop recording, get events + `video_id` |
+| `stop_recording_tool(trim_end_seconds=0)` | Stop recording, get events + `video_id` |
 | `compile_skill_tool(video_id, name)` | Generate `SKILL.json` + `SKILL.md` |
 
 ## Usage
@@ -53,7 +53,7 @@ Three tools should appear:
 ```
 record_skill_tool("my-workflow", lead_in_seconds=5)
     → perform actions on screen
-    → stop_recording_tool()
+    → stop_recording_tool(trim_end_seconds=10)
     → compile_skill_tool(video_id, "my-workflow")
 ```
 
@@ -63,6 +63,11 @@ For example, with `lead_in_seconds=5`, the operator can switch from the MCP clie
 to the target app, and should begin the demonstrated workflow after 5 seconds.
 This trimming is platform-independent and applies to macOS, Windows, Linux, and
 events-only recordings.
+
+Use `trim_end_seconds` when the operator must switch back to the MCP client to
+say "stop". For example, `trim_end_seconds=10` ignores the final 10 seconds of
+events so the generated skill does not include the operator returning to the
+terminal, browser, or chat window.
 
 Compiled skills land in `~/.mcp-videodb/skills/<name>/SKILL.json` and `SKILL.md`.
 

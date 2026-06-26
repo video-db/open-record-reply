@@ -13,6 +13,7 @@ from compiler.compiler import (
     _match_events_to_scenes,
     _normalize_llm_output,
     _trim_events_to_effective_start,
+    _trim_events_to_effective_window,
 )
 
 
@@ -370,6 +371,16 @@ class TestEffectiveStart:
         ]
 
         assert _trim_events_to_effective_start(events, 6000) == events[1:]
+
+    def test_trim_events_to_effective_window_discards_lead_in_and_tail(self):
+        events = [
+            {"event": "action", "ts": 1000, "action": "click"},
+            {"event": "action", "ts": 6000, "action": "click"},
+            {"event": "action", "ts": 7000, "action": "type"},
+            {"event": "action", "ts": 12000, "action": "click"},
+        ]
+
+        assert _trim_events_to_effective_window(events, 6000, 8000) == events[1:3]
 
 
 class TestCompileEventsOnly:

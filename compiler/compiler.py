@@ -83,7 +83,8 @@ async def compile_skill(video_id: str, name: str) -> dict:
         raise RuntimeError(f"No session metadata found for video_id {video_id}")
 
     start_ms = _effective_start_ms(metadata)
-    events = _trim_events_to_effective_start(events, start_ms)
+    end_ms = _effective_end_ms(metadata)
+    events = _trim_events_to_effective_window(events, start_ms, end_ms)
     events = _prefilter_events(events)
     if not events:
         raise RuntimeError("No events remain after noise filtering")
@@ -212,7 +213,8 @@ async def compile_skill_events_only(name: str) -> dict:
         raise RuntimeError(f"No session metadata found for skill '{name}'")
 
     start_ms = _effective_start_ms(metadata)
-    events = _trim_events_to_effective_start(events, start_ms)
+    end_ms = _effective_end_ms(metadata)
+    events = _trim_events_to_effective_window(events, start_ms, end_ms)
     events = _prefilter_events(events)
     if not events:
         raise RuntimeError("No events recorded")
@@ -635,13 +637,26 @@ def _effective_start_ms(metadata: dict) -> int:
     )
 
 
+def _effective_end_ms(metadata: dict) -> int:
+    return int(
+        metadata.get("effective_recording_end_epoch_ms")
+        or metadata.get("recording_end_epoch_ms")
+        or 0
+    )
+
+
 def _trim_events_to_effective_start(events: list[dict], effective_start_ms: int) -> list[dict]:
+    return _trim_events_to_effective_window(events, effective_start_ms, 0)
+
+
+def _trim_events_to_effective_window(events: list[dict], effective_start_ms: int, effective_end_ms: int = 0) -> list[dict]:
     if not effective_start_ms:
-        return events
+        effective_start_ms = 0
     return [
         event
         for event in events
         if event.get("ts", 0) >= effective_start_ms
+        and (not effective_end_ms or event.get("ts", 0) <= effective_end_ms)
     ]
 
 
