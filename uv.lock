@@ -487,8 +487,10 @@ dependencies = [
     { name = "mcp" },
     { name = "pyautogui" },
     { name = "pynput" },
+    { name = "pyobjc-framework-applicationservices", marker = "sys_platform == 'darwin'" },
+    { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin'" },
     { name = "python-dotenv" },
-    { name = "uiautomation" },
+    { name = "uiautomation", marker = "sys_platform == 'win32'" },
     { name = "videodb", extra = ["capture"] },
 ]
 
@@ -504,8 +506,10 @@ requires-dist = [
     { name = "mcp", specifier = ">=1.0.0" },
     { name = "pyautogui", specifier = ">=0.9.54" },
     { name = "pynput", specifier = ">=1.8.2" },
+    { name = "pyobjc-framework-applicationservices", marker = "sys_platform == 'darwin'", specifier = ">=12.0" },
+    { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin'", specifier = ">=12.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
-    { name = "uiautomation", specifier = ">=2.0.29" },
+    { name = "uiautomation", marker = "sys_platform == 'win32'", specifier = ">=2.0.29" },
     { name = "videodb", extras = ["capture"] },
 ]
 
@@ -1533,7 +1537,7 @@ name = "uiautomation"
 version = "2.0.29"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "comtypes" },
+    { name = "comtypes", marker = "sys_platform == 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/bc/23/8238b5cb73e54c3618ce4d443c1830a2749264a0d61a9b61637096b8dc7a/uiautomation-2.0.29.tar.gz", hash = "sha256:3c169112043ce21065aead1d79c3baebdafc9cf03bd24ded02b2db11d423d88d", size = 203970, upload-time = "2025-08-05T05:14:41.194Z" }
 wheels = [

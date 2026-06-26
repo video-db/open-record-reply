@@ -9,7 +9,9 @@ dependencies = [
     "jsonschema>=4.20.0",
     "pyautogui>=0.9.54",
     "pynput>=1.8.2",
-    "uiautomation>=2.0.29",
+    "pyobjc-framework-ApplicationServices>=12.0; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz>=12.0; sys_platform == 'darwin'",
+    "uiautomation>=2.0.29; sys_platform == 'win32'",
 ]
 
 [tool.hatch.build.targets.wheel]

@@ -12,12 +12,25 @@ from capture.ax_client import AxClient
 
 
 class TestGetAxBinaryPath:
-    def test_returns_path_for_windows(self):
-        path = _get_ax_binary_path()
-        assert "ax_hook_win32.py" in path or "ax_hook_win32" in path.lower()
+    @pytest.mark.parametrize(
+        ("platform_name", "expected_hook"),
+        [
+            ("darwin", "ax_hook_darwin.py"),
+            ("win32", "ax_hook_win32.py"),
+            ("linux", "ax_hook_linux.py"),
+        ],
+    )
+    def test_returns_path_for_supported_platforms(self, platform_name, expected_hook):
+        with patch("sys.platform", platform_name):
+            path = _get_ax_binary_path()
+        assert path.endswith(expected_hook)
 
-    @patch("sys.platform", "linux")
-    def test_does_not_raise_for_linux(self):
+    def test_raises_for_unsupported_platform(self):
+        with patch("sys.platform", "freebsd"):
+            with pytest.raises(RuntimeError, match="AX hook not supported"):
+                _get_ax_binary_path()
+
+    def test_returns_path_for_current_platform(self):
         path = _get_ax_binary_path()
         assert path.endswith(".py")
 
