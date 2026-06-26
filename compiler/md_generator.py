@@ -224,14 +224,15 @@ def _template_fallback(skill: dict) -> str:
             label = start_context.get("label", "Starting application state")
             instructions = start_context.get("instructions", "")
             locator = start_context.get("locator", "")
-            context_line = f"Start from {label}"
             if locator:
-                context_line += f" ({locator})"
-            if instructions:
-                context_line += f": {instructions}"
-            lines.append(f"- {context_line}")
+                lines.append(f"- Open to {label}: {locator}")
+            else:
+                lines.append(f"- Start from {label}")
+            if instructions and instructions not in ("Application is open and ready", ""):
+                lines.append(f"- {instructions}")
         for p in preconditions:
-            lines.append(f"- {p}")
+            if p != "Application is open and ready":
+                lines.append(f"- {p}")
         lines.append("")
 
     inputs = skill.get("inputs", {})
@@ -246,7 +247,7 @@ def _template_fallback(skill: dict) -> str:
                 desc = ispec.get("description", "")
                 vals = ispec.get("values", [])
                 if desc:
-                    parts.append(desc)
+                    parts.insert(0, desc)
                 if fmt:
                     parts.append(f"Format: {fmt}")
                 if vals:
@@ -270,20 +271,27 @@ def _template_fallback(skill: dict) -> str:
             expected = step.get("expected_scene", "")
 
             element_desc = _build_element_description(vctx, expected, step, i, len(steps))
+            is_variable = isinstance(value, str) and value.startswith("{{") and value.endswith("}}")
 
             if action == "type" and value:
-                lines.append(f"{i}. {element_desc}, then type `{value}`.")
+                if is_variable:
+                    lines.append(f"{i}. {element_desc}, then type `{value}`.")
+                else:
+                    lines.append(f"{i}. {element_desc} and type the recorded text.")
             elif action == "select" and value:
-                lines.append(f"{i}. {element_desc}, then select `{value}` from the options that appear.")
+                if is_variable:
+                    lines.append(f"{i}. {element_desc}, then select `{value}` from the options that appear.")
+                else:
+                    lines.append(f"{i}. {element_desc} and select the option from the dropdown.")
             elif action == "click":
                 if i == len(steps):
                     lines.append(f"{i}. {element_desc} to complete the workflow.")
                 else:
                     lines.append(f"{i}. {element_desc}.")
             elif action == "wait":
-                lines.append(f"{i}. Wait for the page or dialog to load.")
+                lines.append(f"{i}. Wait for the application to respond and the next state to load.")
             elif action == "navigate":
-                lines.append(f"{i}. Navigate to the required page or view.")
+                lines.append(f"{i}. Navigate to the required view.")
             else:
                 lines.append(f"{i}. {element_desc}.")
         lines.append("")
@@ -305,17 +313,32 @@ def _build_element_description(vctx: str, expected: str, step: dict, idx: int, t
     desc = vctx or expected or ""
     desc = desc.strip().rstrip(".")
 
+    action = step.get("action", "click")
+    target = step.get("target", {})
+    label = target.get("label", "")
+    friendly = _friendly_type(target.get("type", ""))
+
     if desc and desc.lower() != "(no scene match)":
         if desc[0].isupper():
             desc = desc[0].lower() + desc[1:]
-        return f"Click {desc}"
+        if action == "type":
+            if label and not label.startswith("element_at_"):
+                return f"Click the \"{label}\" {friendly} and type into it"
+            return f"Click into the text field ({desc})"
+        elif action == "select":
+            if label and not label.startswith("element_at_"):
+                return f"Click the \"{label}\" {friendly} to open its options"
+            return f"Click the dropdown or option list ({desc})"
+        else:
+            return f"Click {desc}"
 
-    target = step.get("target", {})
-    label = target.get("label", "")
     if label and not label.startswith("element_at_"):
-        return f"Click the \"{label}\" {_friendly_type(target.get('type', ''))}"
+        if action == "type":
+            return f"Click the \"{label}\" {friendly} and type into it"
+        elif action == "select":
+            return f"Click the \"{label}\" {friendly} to open its options"
+        return f"Click the \"{label}\" {friendly}"
 
-    action = step.get("action", "click")
     if action == "click" and idx == total:
         return "Click the confirmation or submit button"
     elif action == "click":
@@ -323,8 +346,8 @@ def _build_element_description(vctx: str, expected: str, step: dict, idx: int, t
     elif action == "type":
         return "Click into the text field"
     elif action == "select":
-        return "Click the dropdown menu"
-    return f"Perform the {action} action"
+        return "Click the dropdown or options list"
+    return f"Interact with the control at step {idx}"
 
 
 def _friendly_type(ax_type: str) -> str:

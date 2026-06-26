@@ -389,13 +389,12 @@ def _next_interaction_scene_index(scenes: list[dict], start_index: int) -> int |
 def _compact_text(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value).lower())
 def _ground_steps_in_matched_events(skill_json: dict, matched: list[dict]) -> None:
-    """Rebuild executable steps from event log + matched scene index.
+    """Merge LLM steps with event-log ground truth.
 
-    The LLM is useful for naming the workflow and describing intent, but the
-    event log is the source of truth for actions/targets/values, and the scene
-    index is the source of truth for visual context. This prevents the model from
-    converting clicks to selects, inventing form-like context, or attaching an
-    unrelated first/last scene to every step.
+    The event log is the source of truth for step count, chronological order,
+    timing (recording_ref), and basic action type (click/type/select). The LLM
+    provides variable names, semantic target labels, navigate/wait action
+    inference, and visual context — these are PRESERVED when present.
     """
     old_steps = [s for s in skill_json.get("steps", []) if isinstance(s, dict)]
     grounded = []
@@ -410,7 +409,6 @@ def _ground_steps_in_matched_events(skill_json: dict, matched: list[dict]) -> No
         if scene_description.lower() == "(no scene match)":
             scene_description = ""
 
-        target = _normalize_target(event.get("target"))
         video_time = float(match.get("video_time") or 0.0)
         scene_start = match.get("scene_start")
         scene_end = match.get("scene_end")
@@ -419,7 +417,36 @@ def _ground_steps_in_matched_events(skill_json: dict, matched: list[dict]) -> No
         else:
             recording_ref = {"start": float(scene_start), "end": float(scene_end)}
 
-        action = _normalize_action(event.get("action"))
+        event_action = _normalize_action(event.get("action"))
+        llm_action = old.get("action")
+        if llm_action in {"navigate", "wait"}:
+            action = llm_action
+        else:
+            action = event_action
+
+        event_target = _normalize_target(event.get("target"))
+        llm_target = old.get("target")
+        event_label_is_positional = str(event_target.get("label", "")).startswith("element_at_")
+        llm_has_semantic_label = (
+            isinstance(llm_target, dict)
+            and bool(llm_target.get("label"))
+            and not str(llm_target.get("label", "")).startswith("element_at_")
+        )
+        if llm_has_semantic_label and event_label_is_positional:
+            target = llm_target
+        else:
+            target = event_target
+
+        old_value = old.get("value")
+        event_value = event.get("value")
+        is_llm_variable = isinstance(old_value, str) and old_value.startswith("{{") and old_value.endswith("}}")
+        if is_llm_variable:
+            step_value = old_value
+        elif event_value is not None:
+            step_value = _redact_sensitive_value(event_value)
+        else:
+            step_value = None
+
         step = {
             "id": len(grounded) + 1,
             "action": action,
@@ -429,8 +456,8 @@ def _ground_steps_in_matched_events(skill_json: dict, matched: list[dict]) -> No
         }
         if scene_description:
             step["expected_scene"] = scene_description
-        if "value" in event:
-            step["value"] = _redact_sensitive_value(event.get("value"))
+        if step_value is not None:
+            step["value"] = step_value
         grounded.append(step)
 
     if grounded:

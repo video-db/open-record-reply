@@ -15,12 +15,26 @@ RULES:
 Map each event to: click, type, select, navigate, or wait.
 
 ## Variable Detection
-A typed/selected value becomes a {{variable}} if:
-- It's a date (YYYY-MM-DD, MM/DD/YYYY, DD/MM/YYYY)
-- It's a monetary amount or number that varies
-- It's a proper name (person, company, product)
-- It's a selection from a dropdown, radio group, checkbox group, segmented control, or other option set (enum)
-- It's a filename or path
+Templated values use {{variable_name}} notation. A typed/selected value becomes a {{variable}} if:
+
+MUST template (always variable — will differ between runs):
+- Search queries typed into ANY search box, filter field, or lookup (YouTube, Google, app search, table filter, command palette, etc.)
+- Free-form text in textareas, message bodies, comments, notes, descriptions, posts, chat inputs
+- Titles, names, or labels the user creates (video title, document name, project name, file name)
+- Proper names of people, companies, products
+- Filenames and file paths entered manually
+- Dates (YYYY-MM-DD, MM/DD/YYYY, DD/MM/YYYY)
+- Monetary amounts or quantities that vary
+- Any text entered into a form field where the value could differ between runs
+- Selections from dropdowns, radio groups, checkbox groups, segmented controls, or option sets (enum type)
+
+DO NOT template (stay as literal values):
+- Username/password fields — REDACT with "[REDACTED]"
+- UI navigation keys (Enter, Tab, Escape) — these are actions, not typed values
+- Fixed application commands typed into a command palette (e.g., "git commit")
+- Button labels, link text, fixed menu options that the user clicks (not types)
+
+When the same typed value appears in scene descriptions as visible UI text AFTER being entered (e.g., search box shows "please dont go"), it is still a variable — the next user may type something different.
 
 ## Event Log Authority
 The event log IS the ground truth. Every click/type event MUST produce a step
@@ -88,23 +102,60 @@ Scan ALL typed values for: passwords, API keys (sk-..., key-..., Bearer ...), ac
 Replace with "[REDACTED]" in the step value. Do not expose in the skill.
 
 ## Verification
-Add 1-3 verification checks:
-- If final action navigates to new page → check for expected element appearing
-- If workflow produces confirmation → check for "Submitted", "Saved", "Confirmed" in AX labels
-- If scene shows success → add visual check
-- If the recording ends before a final success confirmation, verify the last meaningful state that the user actually reached, such as a selected radio option, a populated field, an upload progress row, a file name/title shown, a modal staying open, or the current step indicator.
-- NEVER output generic checks like "Task completed successfully". Verification must name visible UI text, a selected option, a status/progress message, a page/modal title, or another concrete observable state from the recording.
+Add 2-4 verification checks that confirm TASK COMPLETION based on the inferred task understanding:
+
+PRIMARY (check the outcome):
+- What visible evidence proves the TASK was achieved? (video playing, confirmation message shown, new page loaded with expected content, file appeared, status changed to "Complete")
+
+SECONDARY (check the state):
+- What specific UI elements confirm the workflow reached the right end state? (labels, buttons, status text, titles, modal content)
+- Derive checks from the LAST 2-3 scenes — what changed from start to end?
+
+FALLBACK (when recording ends before confirmation):
+- Verify the last MEANINGFUL state the user actually reached (a selected radio option, a populated field, an upload progress row, a file name/title shown, a modal staying open, the current step indicator)
+
+- NEVER output generic checks like "Task completed successfully" or "Workflow completed" — name specific visible UI evidence
+- NEVER name internal fields or application states unless visible on screen
+- Each check must be independently observable by an AI agent looking at the screen
 
 ## Variable Format
 For each input, provide: type ("string", "number", "enum"), optional "format" (e.g. "YYYY-MM-DD"), and "example" from the recording. For enum types, include "values" array.
 Also include a "description" field for each input — a short phrase describing where this field appears on screen and what format it expects (e.g., "The date field in the top section of the form, grey label"). This description will be used to generate natural-language skill instructions.
 
+## Task-Level Understanding
+Before writing steps, look at the FULL event sequence AND scene descriptions to infer:
+- WHAT was the user trying to accomplish? (e.g., "Search YouTube and play a specific song")
+- WHAT was the starting state? (e.g., "YouTube homepage, search bar visible at top center")
+- WHAT was the final outcome? (e.g., "Video player open with the searched song playing")
+
+Use this TASK-level understanding to write the description and verification.
+Do NOT describe individual steps in the description — describe the TASK PURPOSE.
+
 ## Skill Description
-The "description" field of the skill must follow agentskills.io conventions:
-- Explain what the skill does AND when it should be used
-- Include trigger keywords that help an AI agent decide when to invoke this skill
-- Keep it 1-3 sentences, front-load the key use case
-- Example: "Submit a T&E expense in SAP Concur. Use when filing a new expense report with date, amount, and category selection."
+The "description" field must state the TASK OUTCOME and when to invoke:
+- What is accomplished by running this skill? (the end result, not the steps)
+- When should an AI agent use it? (trigger condition)
+- Include trigger keywords for implicit invocation
+- Keep it 1-3 sentences, front-load the outcome
+- Example: "Search YouTube for a given query and play the first video result. Use when the user asks to find and watch a specific video or song on YouTube."
+- Bad example (too low-level): "Click the search bar, type a query, and click the first result."
+
+## Preconditions
+Extract preconditions ONLY from the FIRST scene description and start_context evidence.
+Preconditions MUST describe what the user actually sees before step 1:
+
+- What application or website must be open and in view
+- What page, screen, or dialog must be visible
+- Any specific UI elements that must be present (e.g., "search bar at top center", "login form with username field")
+- Any prerequisite state (e.g., logged in, specific tab selected)
+
+Write preconditions as actionable observable statements:
+- GOOD: "YouTube is open on the homepage with the search bar visible at the top center"
+- GOOD: "SAP Concur is open showing the expense report list page"
+- BAD: "Application is open and ready" (too generic)
+- BAD: "User is logged in" (unobservable — describe what login looks like instead)
+
+Limit to 2-4 preconditions. Derive them from what the first scene description literally shows.
 
 ## Start Context
 Add a "start_context" object that tells a replaying agent where the workflow begins

@@ -241,11 +241,84 @@ class TestGroundStepsInMatchedEvents:
         _ground_steps_in_matched_events(skill, matched)
 
         assert [step["action"] for step in skill["steps"]] == ["click", "type"]
-        assert skill["steps"][0]["target"] == {"type": "AXButton", "label": "element_at_10_20"}
         assert skill["steps"][0]["recording_ref"] == {"start": 5.996, "end": 8.994}
         assert skill["steps"][0]["expected_scene"] == "Chrome New Tab is visible and the address bar is ready."
         assert "terminal-like" not in skill["steps"][0]["visual_context"]
         assert skill["steps"][1]["value"] == "you"
+
+    def test_preserves_llm_variables_and_semantic_labels(self):
+        skill = {
+            "steps": [
+                {
+                    "id": 1,
+                    "action": "click",
+                    "target": {"type": "AXTextField", "label": "YouTube search bar"},
+                    "recording_ref": {"start": 0, "end": 0},
+                    "visual_context": "YouTube homepage with search bar visible at top center",
+                },
+                {
+                    "id": 2,
+                    "action": "type",
+                    "target": {"type": "AXTextField", "label": "YouTube search bar"},
+                    "recording_ref": {"start": 0, "end": 0},
+                    "visual_context": "User clicked the search bar, cursor is blinking",
+                    "value": "{{search_query}}",
+                },
+                {
+                    "id": 3,
+                    "action": "click",
+                    "target": {"type": "AXButton", "label": "Submit"},
+                    "recording_ref": {"start": 0, "end": 0},
+                    "visual_context": "Submit button is blue, bottom-right of the form",
+                },
+            ],
+            "verification": [],
+        }
+        matched = [
+            {
+                "event": {
+                    "event": "action",
+                    "action": "click",
+                    "target": {"type": "AXTextField", "label": "element_at_500_200"},
+                },
+                "scene_description": "YouTube homepage with search bar visible at top center",
+                "video_time": 2.0,
+                "scene_start": 1.0,
+                "scene_end": 3.0,
+            },
+            {
+                "event": {
+                    "event": "action",
+                    "action": "type",
+                    "target": {"type": "AXTextField", "label": "element_at_500_200"},
+                    "value": "please dont go",
+                },
+                "scene_description": "User is typing a search query, suggestions dropdown is open",
+                "video_time": 5.0,
+                "scene_start": 3.0,
+                "scene_end": 7.0,
+            },
+            {
+                "event": {
+                    "event": "action",
+                    "action": "click",
+                    "target": {"type": "AXButton", "label": "Submit"},
+                    "position": {"x": 100, "y": 500},
+                },
+                "scene_description": "Submit button clicked, video playing",
+                "video_time": 9.0,
+                "scene_start": 7.0,
+                "scene_end": 11.0,
+            },
+        ]
+
+        _ground_steps_in_matched_events(skill, matched)
+
+        assert [step["action"] for step in skill["steps"]] == ["click", "type", "click"]
+        assert skill["steps"][0]["target"]["label"] == "YouTube search bar"
+        assert skill["steps"][1]["target"]["label"] == "YouTube search bar"
+        assert skill["steps"][1]["value"] == "{{search_query}}"
+        assert skill["steps"][2]["target"]["label"] == "Submit"
     def test_match_events_to_scenes_uses_semantic_sequence(self):
         start_ms = 100000
         events = [
