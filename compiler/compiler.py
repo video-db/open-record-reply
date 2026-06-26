@@ -87,24 +87,8 @@ async def compile_skill(video_id: str, name: str) -> dict:
         raise RuntimeError("No events remain after noise filtering")
 
     start_ms = metadata["recording_start_epoch_ms"]
-    matched = []
-    for event in events:
-        if event.get("event") != "action":
-            continue
-        video_time = (event["ts"] - start_ms) / 1000.0
-        scene_match = None
-        for scene in scenes:
-            if scene["start"] <= video_time <= scene["end"]:
-                scene_match = scene
-                break
-        matched.append({
-            "event": event,
-            "scene_description": scene_match["description"] if scene_match else "(no scene match)",
-            "video_time": video_time,
-            "scene_start": scene_match["start"] if scene_match else None,
-            "scene_end": scene_match["end"] if scene_match else None,
-        })
-
+    event_scene_offset = _estimate_event_scene_offset(events, scenes, start_ms)
+    matched = _match_events_to_scenes(events, scenes, start_ms, event_scene_offset)
     prompt = build_prompt(name, events, matched, transcript)
     skill_json = None
 
@@ -134,10 +118,11 @@ async def compile_skill(video_id: str, name: str) -> dict:
         raise RuntimeError(f"LLM compilation failed after {LLM_MAX_RETRIES} retries")
 
     skill_json = _normalize_llm_output(skill_json, name)
+    _ground_steps_in_matched_events(skill_json, matched)
     skill_json["video_id"] = video_id
     skill_json["scene_index_id"] = scene_index_id
     skill_json["compiled_at"] = datetime.now(timezone.utc).isoformat()
-    _attach_expected_scenes(skill_json, scenes, metadata)
+    _attach_expected_scenes(skill_json, scenes, metadata, event_scene_offset)
 
     errors = _validate_skill(skill_json)
     if errors:
@@ -151,10 +136,11 @@ async def compile_skill(video_id: str, name: str) -> dict:
             else json.loads(response["output"])
         )
         skill_json = _normalize_llm_output(skill_json, name)
+        _ground_steps_in_matched_events(skill_json, matched)
         skill_json["video_id"] = video_id
         skill_json["scene_index_id"] = scene_index_id
         skill_json["compiled_at"] = datetime.now(timezone.utc).isoformat()
-        _attach_expected_scenes(skill_json, scenes, metadata)
+        _attach_expected_scenes(skill_json, scenes, metadata, event_scene_offset)
 
     save_skill(skill_json)
     return skill_json
@@ -289,6 +275,242 @@ async def _poll_scene_index(video, scene_index_id: str, max_attempts: int = 20) 
     logger.warning(f"Scene index poll exhausted — got {len(scenes)} scenes")
     return scenes or []
 
+def _match_events_to_scenes(events: list[dict], scenes: list[dict], start_ms: int, fallback_offset: float = 0.0) -> list[dict]:
+    action_events = [event for event in events if event.get("event") == "action"]
+    semantic_scene_indices: list[int | None] = [None] * len(action_events)
+
+    cursor = 0
+    for idx, event in enumerate(action_events):
+        if event.get("action") not in {"type", "select"}:
+            continue
+        value = str(event.get("value") or "").strip()
+        if not value:
+            continue
+        scene_idx = _find_scene_index_for_value(scenes, value, cursor)
+        if scene_idx is not None:
+            semantic_scene_indices[idx] = scene_idx
+            cursor = max(cursor, scene_idx)
+
+    for idx, event in enumerate(action_events):
+        if semantic_scene_indices[idx] is not None:
+            continue
+        label = event.get("target", {}).get("label")
+        next_typed_idx = _next_typed_event_index(action_events, idx, label)
+        if next_typed_idx is not None and semantic_scene_indices[next_typed_idx] is not None:
+            semantic_scene_indices[idx] = max(0, semantic_scene_indices[next_typed_idx] - 1)
+            continue
+        prev_idx = _previous_matched_scene_index(semantic_scene_indices, idx)
+        if prev_idx is not None:
+            semantic_scene_indices[idx] = _next_interaction_scene_index(scenes, prev_idx + 1) or prev_idx
+
+    matched = []
+    for idx, event in enumerate(action_events):
+        event_time = (event["ts"] - start_ms) / 1000.0
+        scene_match = None
+        scene_idx = semantic_scene_indices[idx]
+        if scene_idx is not None and 0 <= scene_idx < len(scenes):
+            scene_match = scenes[scene_idx]
+            video_time = (float(scene_match.get("start", 0)) + float(scene_match.get("end", 0))) / 2.0
+        else:
+            video_time = max(0.0, event_time - fallback_offset)
+            scene_match = _find_scene_for_time(scenes, video_time)
+        matched.append({
+            "event": event,
+            "scene_description": scene_match["description"] if scene_match else "(no scene match)",
+            "video_time": video_time,
+            "event_time": event_time,
+            "scene_start": scene_match["start"] if scene_match else None,
+            "scene_end": scene_match["end"] if scene_match else None,
+        })
+    return matched
+
+
+def _find_scene_index_for_value(scenes: list[dict], value: str, start_index: int = 0) -> int | None:
+    normalized_value = _compact_text(value)
+    if not normalized_value:
+        return None
+    candidates = []
+    for idx in range(max(0, start_index), len(scenes)):
+        desc = str(scenes[idx].get("description") or "")
+        compact_desc = _compact_text(desc)
+        if normalized_value in compact_desc or (len(normalized_value) <= 3 and "youtube" in compact_desc and normalized_value in "youtube"):
+            score = 0
+            lowered = desc.lower()
+            if "typing" in lowered or "entered" in lowered or "search" in lowered:
+                score += 2
+            if "autocomplete" in lowered or "suggestion" in lowered:
+                score += 1
+            candidates.append((score, idx))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    return candidates[0][1]
+
+
+def _next_typed_event_index(events: list[dict], index: int, label: str | None) -> int | None:
+    for next_index in range(index + 1, len(events)):
+        event = events[next_index]
+        if event.get("action") == "type":
+            if not label or event.get("target", {}).get("label") == label:
+                return next_index
+        if event.get("action") == "click" and event.get("target", {}).get("label") != label:
+            return None
+    return None
+
+
+def _previous_matched_scene_index(scene_indices: list[int | None], index: int) -> int | None:
+    for prev_index in range(index - 1, -1, -1):
+        if scene_indices[prev_index] is not None:
+            return scene_indices[prev_index]
+    return None
+
+
+def _next_interaction_scene_index(scenes: list[dict], start_index: int) -> int | None:
+    strong_keywords = (
+        "clicked", "clicks", "loading", "loads", "watch page", "opens", "navigat",
+    )
+    weak_keywords = (
+        "results page", "search results", "homepage", "home page",
+    )
+    first_weak = None
+    for idx in range(max(0, start_index), len(scenes)):
+        desc = str(scenes[idx].get("description") or "").lower()
+        if "terminal" in desc and "youtube" not in desc:
+            continue
+        if any(keyword in desc for keyword in strong_keywords):
+            return idx
+        if first_weak is None and any(keyword in desc for keyword in weak_keywords):
+            first_weak = idx
+    if first_weak is not None:
+        return first_weak
+    return start_index if start_index < len(scenes) else None
+
+
+def _compact_text(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value).lower())
+def _ground_steps_in_matched_events(skill_json: dict, matched: list[dict]) -> None:
+    """Rebuild executable steps from event log + matched scene index.
+
+    The LLM is useful for naming the workflow and describing intent, but the
+    event log is the source of truth for actions/targets/values, and the scene
+    index is the source of truth for visual context. This prevents the model from
+    converting clicks to selects, inventing form-like context, or attaching an
+    unrelated first/last scene to every step.
+    """
+    old_steps = [s for s in skill_json.get("steps", []) if isinstance(s, dict)]
+    grounded = []
+
+    for index, match in enumerate(matched):
+        event = match.get("event", {})
+        if event.get("event") != "action":
+            continue
+
+        old = old_steps[index] if index < len(old_steps) else {}
+        scene_description = str(match.get("scene_description") or "").strip()
+        if scene_description.lower() == "(no scene match)":
+            scene_description = ""
+
+        target = _normalize_target(event.get("target"))
+        video_time = float(match.get("video_time") or 0.0)
+        scene_start = match.get("scene_start")
+        scene_end = match.get("scene_end")
+        if scene_start is None or scene_end is None:
+            recording_ref = {"start": video_time, "end": video_time}
+        else:
+            recording_ref = {"start": float(scene_start), "end": float(scene_end)}
+
+        action = _normalize_action(event.get("action"))
+        step = {
+            "id": len(grounded) + 1,
+            "action": action,
+            "target": target,
+            "recording_ref": recording_ref,
+            "visual_context": _best_step_context(old, scene_description, event, action),
+        }
+        if scene_description:
+            step["expected_scene"] = scene_description
+        if "value" in event:
+            step["value"] = _redact_sensitive_value(event.get("value"))
+        grounded.append(step)
+
+    if grounded:
+        skill_json["steps"] = grounded
+        skill_json["verification"] = _synthesize_verification(skill_json)
+
+
+def _best_step_context(old_step: dict, scene_description: str, event: dict, action: str) -> str:
+    old_context = str(old_step.get("visual_context") or "").strip()
+    if old_context and not _looks_unmatched_or_internal(old_context):
+        return old_context
+    if scene_description:
+        return _summarize_scene_for_step(scene_description, event, action)
+    return _fallback_visual_context(action, _normalize_target(event.get("target")))
+
+
+def _looks_unmatched_or_internal(text: str) -> bool:
+    lowered = text.lower()
+    return (
+        not text.strip()
+        or "(no scene match)" in lowered
+        or "element_at_" in lowered
+        or "terminal-like" in lowered
+        or "no clear form field" in lowered
+    )
+
+
+def _summarize_scene_for_step(scene_description: str, event: dict, action: str) -> str:
+    cleaned = re.sub(r"\s+", " ", scene_description.replace("**", "")).strip()
+    if len(cleaned) > 420:
+        cleaned = cleaned[:420].rstrip(" ,;:") + "."
+    value = event.get("value")
+    if action == "type" and value:
+        return f"{cleaned} Type the recorded value into the active text field."
+    if action == "click":
+        return f"{cleaned} Click the visible control or result that matches this state."
+    return cleaned
+
+def _find_scene_for_time(scenes: list[dict], video_time: float) -> dict | None:
+    for scene in scenes:
+        if scene.get("start", 0) <= video_time <= scene.get("end", 0):
+            return scene
+    return None
+
+
+def _estimate_event_scene_offset(events: list[dict], scenes: list[dict], start_ms: int) -> float:
+    """Estimate delay between MCP event timestamps and exported video time.
+
+    The event recorder starts before the capture binary has produced the exported
+    video. When that startup delay exists, raw event times can exceed the video
+    duration, causing every step to match the final scene. Estimate the offset by
+    anchoring typed values to scene descriptions that mention those values.
+    """
+    anchors = []
+    for event in events:
+        if event.get("event") != "action" or event.get("action") not in {"type", "select"}:
+            continue
+        value = str(event.get("value") or "").strip().lower()
+        if not value:
+            continue
+        event_time = (event["ts"] - start_ms) / 1000.0
+        for scene in scenes:
+            desc = str(scene.get("description") or "").lower()
+            if value in desc or desc.replace(" ", "") .find(value.replace(" ", "")) >= 0:
+                scene_mid = (float(scene.get("start", 0)) + float(scene.get("end", 0))) / 2.0
+                anchors.append(event_time - scene_mid)
+                break
+    if anchors:
+        anchors.sort()
+        return anchors[len(anchors) // 2]
+
+    max_scene_end = max((float(s.get("end", 0)) for s in scenes), default=0.0)
+    event_times = [
+        (e["ts"] - start_ms) / 1000.0
+        for e in events
+        if e.get("event") == "action"
+    ]
+    if event_times and max(event_times) > max_scene_end and max_scene_end > 0:
+        return max(0.0, min(event_times) - scenes[0].get("start", 0))
+    return 0.0
 
 def _to_relative_seconds(end_time: float, metadata: dict) -> float:
     """Normalize recording_ref.end to relative seconds from recording start.
@@ -309,12 +531,20 @@ def _to_relative_seconds(end_time: float, metadata: dict) -> float:
     return end_time
 
 
-def _attach_expected_scenes(skill_json: dict, scenes: list[dict], metadata: dict) -> None:
+def _attach_expected_scenes(skill_json: dict, scenes: list[dict], metadata: dict, event_scene_offset: float = 0.0) -> None:
     max_scene_end = max((s.get("end", 0) for s in scenes), default=0)
+    step_refs = [
+        _to_relative_seconds(step.get("recording_ref", {}).get("end", 0), metadata)
+        for step in skill_json.get("steps", [])
+    ]
+    # The LLM may output recording_ref values either in event-recorder time or
+    # already in video/scene-index time. Only subtract the startup offset when
+    # refs extend beyond the indexed video timeline.
+    ref_offset = event_scene_offset if step_refs and max(step_refs) > max_scene_end else 0.0
     steps_no_match = 0
     for step in skill_json.get("steps", []):
         ref = step.get("recording_ref", {})
-        end_time = _to_relative_seconds(ref.get("end", 0), metadata)
+        end_time = max(0.0, _to_relative_seconds(ref.get("end", 0), metadata) - ref_offset)
         best = ""
         for scene in scenes:
             if scene.get("start", 0) <= end_time <= scene.get("end", 0):

@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-from videodb.capture import CaptureClient
+from capture.capture_client import CaptureClient
 
 from config import (
     BASE_URL,
@@ -144,9 +144,12 @@ async def record_skill(name: str) -> dict:
         )
 
         try:
-            await state.capture_client.request_permission("microphone")
-        except Exception:
-            logger.warning("Microphone permission denied — continuing without mic")
+            await asyncio.wait_for(
+                state.capture_client.request_permission("microphone"),
+                timeout=CAPTURE_ACTIVE_TIMEOUT_SECONDS,
+            )
+        except Exception as e:
+            logger.warning(f"Microphone permission unavailable ({e}) - continuing without mic")
 
         await asyncio.wait_for(
             state.capture_client.request_permission("screen_capture"),
@@ -212,7 +215,7 @@ async def stop_recording() -> dict:
 
     if state.capture_client:
         try:
-            await state.capture_client.stop_session()
+            await asyncio.wait_for(state.capture_client.stop_session(), timeout=30.0)
         except Exception as e:
             logger.error(f"Capture stop failed: {e}")
 
@@ -223,7 +226,7 @@ async def stop_recording() -> dict:
         )
 
         try:
-            await state.capture_client.shutdown()
+            await asyncio.wait_for(state.capture_client.shutdown(), timeout=10.0)
         except Exception as e:
             logger.warning(f"Capture shutdown error: {e}")
 
@@ -301,7 +304,10 @@ async def _poll_export(session_id: str, collection_id: str, timeout: int = 120) 
                 logger.info(f"Export triggered: {vid}")
                 return vid
         except Exception as e:
+            message = str(e)
             logger.warning(f"Export trigger error: {e}")
+            if "failed" in message.lower() or "cannot export session" in message.lower():
+                return None
         await asyncio.sleep(EXPORT_POLL_INTERVAL_SECONDS)
     return None
 
@@ -310,11 +316,11 @@ async def _abort_capture():
     try:
         if state.capture_client:
             try:
-                await state.capture_client.stop_session()
+                await asyncio.wait_for(state.capture_client.stop_session(), timeout=5.0)
             except Exception:
                 pass
             try:
-                await state.capture_client.shutdown()
+                await asyncio.wait_for(state.capture_client.shutdown(), timeout=5.0)
             except Exception:
                 pass
     except Exception:

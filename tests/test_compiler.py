@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from compiler.compiler import compile_skill_events_only, _normalize_llm_output
+from compiler.compiler import compile_skill_events_only, _normalize_llm_output, _ground_steps_in_matched_events, _match_events_to_scenes
 
 
 class TestNormalizeLlmOutput:
@@ -191,6 +191,88 @@ class TestNormalizeLlmOutput:
 
         assert result["verification"] == [{"type": "ax_element", "check": "Saved as private"}]
 
+class TestGroundStepsInMatchedEvents:
+    def test_rebuilds_steps_from_events_and_scenes(self):
+        skill = {
+            "steps": [
+                {
+                    "id": 99,
+                    "action": "select",
+                    "target": {"type": "AXButton", "label": "wrong"},
+                    "recording_ref": {"start": 0, "end": 0},
+                    "visual_context": "terminal-like window with no clear form field",
+                },
+                {
+                    "id": 100,
+                    "action": "click",
+                    "target": {"type": "AXTextField", "label": "wrong"},
+                    "recording_ref": {"start": 0, "end": 0},
+                    "visual_context": "(no scene match)",
+                },
+            ],
+            "verification": [],
+        }
+        matched = [
+            {
+                "event": {
+                    "event": "action",
+                    "action": "click",
+                    "target": {"type": "AXButton", "label": "element_at_10_20", "role": "AXButton"},
+                },
+                "scene_description": "Chrome New Tab is visible and the address bar is ready.",
+                "video_time": 6.5,
+                "scene_start": 5.996,
+                "scene_end": 8.994,
+            },
+            {
+                "event": {
+                    "event": "action",
+                    "action": "type",
+                    "target": {"type": "AXTextField", "label": "element_at_10_20", "role": "AXTextField"},
+                    "value": "you",
+                },
+                "scene_description": "The user is typing into the Chrome address bar and suggestions appear.",
+                "video_time": 9.4,
+                "scene_start": 8.994,
+                "scene_end": 11.992,
+            },
+        ]
+
+        _ground_steps_in_matched_events(skill, matched)
+
+        assert [step["action"] for step in skill["steps"]] == ["click", "type"]
+        assert skill["steps"][0]["target"] == {"type": "AXButton", "label": "element_at_10_20"}
+        assert skill["steps"][0]["recording_ref"] == {"start": 5.996, "end": 8.994}
+        assert skill["steps"][0]["expected_scene"] == "Chrome New Tab is visible and the address bar is ready."
+        assert "terminal-like" not in skill["steps"][0]["visual_context"]
+        assert skill["steps"][1]["value"] == "you"
+    def test_match_events_to_scenes_uses_semantic_sequence(self):
+        start_ms = 100000
+        events = [
+            {"event": "action", "ts": start_ms + 69015, "action": "click", "target": {"type": "AXButton", "label": "omnibox"}},
+            {"event": "action", "ts": start_ms + 73646, "action": "type", "target": {"type": "AXTextField", "label": "omnibox"}, "value": "you"},
+            {"event": "action", "ts": start_ms + 73647, "action": "click", "target": {"type": "AXButton", "label": "youtube-result"}},
+            {"event": "action", "ts": start_ms + 78581, "action": "click", "target": {"type": "AXButton", "label": "youtube-search"}},
+            {"event": "action", "ts": start_ms + 87392, "action": "type", "target": {"type": "AXTextField", "label": "youtube-search"}, "value": "pleasedontgosong"},
+            {"event": "action", "ts": start_ms + 87393, "action": "click", "target": {"type": "AXButton", "label": "video-result"}},
+        ]
+        scenes = [
+            {"start": 0.0, "end": 2.998, "description": "Terminal output showing recording started."},
+            {"start": 2.998, "end": 5.996, "description": "More terminal output."},
+            {"start": 5.996, "end": 8.994, "description": "Chrome New Tab page with address bar ready for input."},
+            {"start": 8.994, "end": 11.992, "description": "The user is typing youtube into the Chrome address bar and autocomplete suggestions appear."},
+            {"start": 11.992, "end": 14.99, "description": "Google search results page for youtube is visible."},
+            {"start": 20.986, "end": 23.984, "description": "The user clicked the YouTube result and YouTube is loading."},
+            {"start": 23.984, "end": 26.982, "description": "The YouTube homepage is loaded with the search box visible."},
+            {"start": 26.982, "end": 29.98, "description": "The user is typing please dont go song into YouTube search and suggestions appear."},
+            {"start": 29.98, "end": 32.978, "description": "YouTube search results page for please dont go song is visible."},
+            {"start": 32.978, "end": 35.976, "description": "The user clicked Joel Adams - Please Don't Go and the watch page loads."},
+        ]
+
+        matched = _match_events_to_scenes(events, scenes, start_ms, fallback_offset=60.0)
+        starts = [item["scene_start"] for item in matched]
+
+        assert starts == [5.996, 8.994, 20.986, 23.984, 26.982, 32.978]
 class TestCompileEventsOnly:
     @pytest.mark.asyncio
     async def test_requires_events(self, tmp_path):
