@@ -13,6 +13,10 @@ class FakeAX:
     kAXTitleAttribute = "AXTitle"
     kAXDescriptionAttribute = "AXDescription"
     kAXValueAttribute = "AXValue"
+    kAXPlaceholderValueAttribute = "AXPlaceholder"
+    kAXHelpAttribute = "AXHelp"
+    kAXIdentifierAttribute = "AXIdentifier"
+    kAXRoleDescriptionAttribute = "AXRoleDescription"
     kAXPositionAttribute = "AXPosition"
     kAXSizeAttribute = "AXSize"
     kAXValueCGPointType = 1
@@ -37,6 +41,10 @@ def test_ax_element_to_info_maps_role_label_and_frame(monkeypatch):
         "AXTitle": "",
         "AXDescription": "Search",
         "AXValue": "",
+        "AXPlaceholder": "",
+        "AXHelp": "",
+        "AXIdentifier": "",
+        "AXRoleDescription": "",
         "AXPosition": SimpleNamespace(x=10, y=20),
         "AXSize": SimpleNamespace(width=300, height=40),
     }
@@ -54,6 +62,29 @@ def test_ax_element_to_info_maps_role_label_and_frame(monkeypatch):
         "label": "Search",
         "type": "AXTextField",
     }
+
+
+def test_ax_element_to_info_uses_placeholder_label(monkeypatch):
+    values = {
+        "AXRole": "AXTextArea",
+        "AXTitle": "",
+        "AXDescription": "",
+        "AXValue": "",
+        "AXPlaceholder": "Message #testing",
+        "AXHelp": "",
+        "AXIdentifier": "",
+        "AXRoleDescription": "",
+        "AXPosition": SimpleNamespace(x=10, y=20),
+        "AXSize": SimpleNamespace(width=300, height=40),
+    }
+
+    monkeypatch.setattr(darwin, "_get_ax_module", lambda: FakeAX)
+    monkeypatch.setattr(darwin, "_copy_attribute", lambda _element, attr: values[attr])
+
+    result = darwin._ax_element_to_info(object(), 1, 2)
+
+    assert result["label"] == "Message #testing"
+    assert result["type"] == "AXTextField"
 
 
 def test_to_number_decodes_ax_value(monkeypatch):
@@ -189,6 +220,32 @@ def test_on_press_accumulates_pending_text(monkeypatch):
 
     assert events[0]["action"] == "type"
     assert events[0]["target"] == {"type": "AXTextField", "label": "Search", "role": "AXTextField"}
+    assert events[0]["value"] == "hi"
+
+
+def test_on_press_falls_back_to_last_unknown_click(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(darwin, "is_recording", True)
+    monkeypatch.setattr(darwin, "_pending_type_target", None)
+    monkeypatch.setattr(darwin, "_pending_value", "")
+    monkeypatch.setattr(darwin, "_pending_action_type", "")
+    monkeypatch.setattr(darwin, "_last_click_target", {
+        "type": "AXUnknown",
+        "label": "Message #testing",
+    })
+    monkeypatch.setattr(darwin, "write_event", events.append)
+
+    darwin._on_press(SimpleNamespace(char="h"))
+    darwin._on_press(SimpleNamespace(char="i"))
+    darwin._on_press(darwin.keyboard.Key.enter)
+
+    assert events[0]["action"] == "type"
+    assert events[0]["target"] == {
+        "type": "AXTextField",
+        "label": "Message #testing",
+        "role": "AXTextField",
+    }
     assert events[0]["value"] == "hi"
 
 

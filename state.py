@@ -12,6 +12,7 @@ class ServerState:
     is_recording: bool = False
     recording_skill_name: str = ""
     recording_start_epoch_ms: int = 0
+    effective_recording_start_epoch_ms: int = 0
     ax_proc: object = None
     ax_subproc: object = None
     ax_client: object = None

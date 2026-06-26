@@ -44,18 +44,25 @@ Three tools should appear:
 
 | Tool | Description |
 |------|-------------|
-| `record_skill_tool(name)` | Start recording a workflow |
+| `record_skill_tool(name, lead_in_seconds=0)` | Start recording a workflow |
 | `stop_recording_tool()` | Stop recording, get events + `video_id` |
 | `compile_skill_tool(video_id, name)` | Generate `SKILL.json` + `SKILL.md` |
 
 ## Usage
 
 ```
-record_skill_tool("my-workflow")
+record_skill_tool("my-workflow", lead_in_seconds=5)
     → perform actions on screen
     → stop_recording_tool()
     → compile_skill_tool(video_id, "my-workflow")
 ```
+
+Use `lead_in_seconds` for clean manual recordings. The recorder starts capture
+immediately, then the compiler ignores events before the effective workflow start.
+For example, with `lead_in_seconds=5`, the operator can switch from the MCP client
+to the target app, and should begin the demonstrated workflow after 5 seconds.
+This trimming is platform-independent and applies to macOS, Windows, Linux, and
+events-only recordings.
 
 Compiled skills land in `~/.mcp-videodb/skills/<name>/SKILL.json` and `SKILL.md`.
 

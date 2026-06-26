@@ -43,6 +43,8 @@ _listener_mouse = None
 _listener_keyboard = None
 _last_element = None
 _last_element_info = None
+_last_click_target = None
+_last_click_ts = 0
 
 
 def write_response(msg):
@@ -231,11 +233,7 @@ def _ax_element_to_info(element, fallback_x, fallback_y):
 
     role = _coerce_text(_copy_attribute(element, AX.kAXRoleAttribute))
     label = ""
-    for attr in (
-        AX.kAXTitleAttribute,
-        AX.kAXDescriptionAttribute,
-        AX.kAXValueAttribute,
-    ):
+    for attr in _label_attributes():
         label = _coerce_text(_copy_attribute(element, attr)).strip()
         if label:
             break
@@ -250,6 +248,27 @@ def _ax_element_to_info(element, fallback_x, fallback_y):
         "label": label,
         "type": _role_to_ax_type(role, default="AXUnknown"),
     }
+
+
+def _label_attributes():
+    AX = _get_ax_module()
+    if AX is None:
+        return []
+    names = [
+        "kAXTitleAttribute",
+        "kAXDescriptionAttribute",
+        "kAXValueAttribute",
+        "kAXPlaceholderValueAttribute",
+        "kAXHelpAttribute",
+        "kAXIdentifierAttribute",
+        "kAXRoleDescriptionAttribute",
+    ]
+    attrs = []
+    for name in names:
+        attr = getattr(AX, name, None)
+        if attr and attr not in attrs:
+            attrs.append(attr)
+    return attrs
 
 
 def _try_get_element_via_accessibility(x, y):
@@ -338,6 +357,7 @@ def _role_to_ax_type(role, default="AXButton"):
         "AXStaticText": "AXStaticText",
         "AXLink": "AXLink",
         "AXImage": "AXButton",
+        "AXMenuBarItem": "AXMenuItem",
     }
     return mapping.get(role, default)
 
@@ -566,8 +586,18 @@ def _finalize_pending(ts=None):
     _pending_action_type = ""
 
 
+def _target_from_info(el_info, default_type="AXUnknown"):
+    target_type = el_info.get("type") or default_type
+    return {
+        "type": target_type,
+        "label": el_info.get("label", ""),
+        "role": target_type,
+    }
+
+
 def _on_click(x, y, button, pressed):
     global _pending_type_target, _pending_value, _pending_action_type
+    global _last_click_target, _last_click_ts
     if not is_recording or not pressed:
         return
     if button != mouse.Button.left:
@@ -579,21 +609,19 @@ def _on_click(x, y, button, pressed):
     if _pending_value.strip():
         _finalize_pending(ts - 1)
 
+    _last_click_target = el_info
+    _last_click_ts = ts
+
     if _is_input_control(el_info):
         _pending_type_target = el_info
         _pending_action_type = _get_action_type_for_control(el_info)
         _pending_value = ""
     elif el_info:
-        target = {
-            "type": el_info.get("type", "AXButton"),
-            "label": el_info.get("label", ""),
-            "role": el_info.get("type", "AXButton"),
-        }
         evt = {
             "event": "action",
             "ts": ts,
             "action": "click",
-            "target": target,
+            "target": _target_from_info(el_info),
             "position": {"x": x, "y": y},
         }
         write_event(evt)
@@ -603,16 +631,14 @@ def _on_press(key):
     global _pending_type_target, _pending_value, _pending_action_type
     if not is_recording:
         return
-    if _pending_type_target is None:
-        return
 
     ts = int(time.time() * 1000)
 
     try:
         if hasattr(key, 'char') and key.char is not None:
-            _pending_value += key.char
+            _append_pending_text(key.char)
         elif key == keyboard.Key.space:
-            _pending_value += " "
+            _append_pending_text(" ")
         elif key == keyboard.Key.tab:
             _finalize_pending(ts)
         elif key == keyboard.Key.enter:
@@ -628,9 +654,23 @@ def _on_press(key):
         pass
 
 
+def _append_pending_text(text):
+    global _pending_type_target, _pending_action_type, _pending_value
+    if _pending_type_target is None:
+        if _last_click_target is None:
+            return
+        _pending_type_target = dict(_last_click_target)
+        if _pending_type_target.get("type") in ("", "AXUnknown"):
+            _pending_type_target["type"] = "AXTextField"
+        _pending_action_type = "type"
+        _pending_value = ""
+    _pending_value += text
+
+
 def handle_message(msg):
     global is_recording, events_file, _last_element, _last_element_info
     global _listener_mouse, _listener_keyboard, _pending_type_target, _pending_value, _pending_action_type
+    global _last_click_target, _last_click_ts
 
     rid = msg["id"]
     method = msg["method"]
@@ -641,6 +681,11 @@ def handle_message(msg):
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         events_file = open(output_path, "a")
         is_recording = True
+        _pending_type_target = None
+        _pending_value = ""
+        _pending_action_type = ""
+        _last_click_target = None
+        _last_click_ts = 0
         write_response({"id": rid, "status": "ok", "result": {"pid": os.getpid()}})
 
         if HAS_PYNPUT:
@@ -669,6 +714,8 @@ def handle_message(msg):
         _pending_type_target = None
         _pending_value = ""
         _pending_action_type = ""
+        _last_click_target = None
+        _last_click_ts = 0
         if events_file:
             events_file.flush()
             events_file.close()

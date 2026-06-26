@@ -6,7 +6,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from compiler.compiler import compile_skill_events_only, _normalize_llm_output, _ground_steps_in_matched_events, _match_events_to_scenes
+from compiler.compiler import (
+    compile_skill_events_only,
+    _effective_start_ms,
+    _ground_steps_in_matched_events,
+    _match_events_to_scenes,
+    _normalize_llm_output,
+    _trim_events_to_effective_start,
+)
 
 
 class TestNormalizeLlmOutput:
@@ -346,6 +353,25 @@ class TestGroundStepsInMatchedEvents:
         starts = [item["scene_start"] for item in matched]
 
         assert starts == [5.996, 8.994, 20.986, 23.984, 26.982, 32.978]
+
+
+class TestEffectiveStart:
+    def test_effective_start_prefers_trimmed_start(self):
+        assert _effective_start_ms({
+            "recording_start_epoch_ms": 1000,
+            "effective_recording_start_epoch_ms": 6000,
+        }) == 6000
+
+    def test_trim_events_to_effective_start_discards_lead_in(self):
+        events = [
+            {"event": "action", "ts": 1000, "action": "click"},
+            {"event": "action", "ts": 6000, "action": "click"},
+            {"event": "action", "ts": 7000, "action": "type"},
+        ]
+
+        assert _trim_events_to_effective_start(events, 6000) == events[1:]
+
+
 class TestCompileEventsOnly:
     @pytest.mark.asyncio
     async def test_requires_events(self, tmp_path):

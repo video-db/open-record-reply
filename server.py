@@ -92,10 +92,10 @@ async def request_capture_permissions_tool() -> dict:
     }
 
 @mcp.tool()
-async def record_skill_tool(name: str) -> dict:
+async def record_skill_tool(name: str, lead_in_seconds: float = 0.0) -> dict:
     """Start recording a workflow that will later be compiled into a skill."""
     await _ensure_connected()
-    return await record_skill(name)
+    return await record_skill(name, lead_in_seconds=lead_in_seconds)
 
 
 @mcp.tool()
