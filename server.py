@@ -8,8 +8,8 @@ from capture.capture_client import CaptureClient
 
 from capture.recorder import record_skill, stop_recording
 from compiler.compiler import compile_skill, compile_skill_events_only
-from config import API_KEY, BASE_URL, CAPTURE_ACTIVE_TIMEOUT_SECONDS, COLLECTION_NAME
-from registry import save_skill_md
+from config import API_KEY, BASE_URL, CAPTURE_ACTIVE_TIMEOUT_SECONDS, COLLECTION_NAME, SKILLS_ROOT
+from registry import list_skills, save_skill_md
 from state import state
 
 mcp = FastMCP("videodb-record-replay")
@@ -115,6 +115,29 @@ async def compile_skill_tool(video_id: str, name: str) -> dict:
     md_path = await save_skill_md(skill)
     skill["skill_md_path"] = str(md_path)
     return skill
+
+
+@mcp.tool()
+async def list_skills_tool() -> dict:
+    """List all skills generated through this MCP."""
+    skills = list_skills()
+    return {"skills": skills, "count": len(skills)}
+
+
+@mcp.resource("skills://list")
+async def list_skills_resource() -> str:
+    """List all available skills (loaded into agent context when selected)."""
+    import json
+    return json.dumps(list_skills(), indent=2)
+
+
+@mcp.resource("skills://{name}/content")
+async def get_skill_resource(name: str) -> str:
+    """Load a skill's SKILL.md into the agent context."""
+    path = SKILLS_ROOT / name / "SKILL.md"
+    if not path.exists():
+        raise FileNotFoundError(f"Skill '{name}' not found at {path}")
+    return path.read_text(encoding="utf-8")
 
 
 def main() -> None:
