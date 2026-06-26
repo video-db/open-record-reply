@@ -68,6 +68,62 @@ def test_find_elements_filters_by_type_and_prefers_label(monkeypatch):
     assert all(item["found"] for item in results)
 
 
+def test_public_info_removes_internal_element():
+    result = darwin._public_info({
+        "label": "Save",
+        "type": "AXButton",
+        "_element": object(),
+    })
+
+    assert result == {"label": "Save", "type": "AXButton"}
+
+
+def test_handle_message_find_element_stores_internal_element(monkeypatch):
+    element = object()
+    responses = []
+
+    monkeypatch.setattr(darwin, "write_response", responses.append)
+    monkeypatch.setattr(darwin, "_find_elements", lambda *_args, **_kwargs: [{
+        "found": True,
+        "label": "Save",
+        "type": "AXButton",
+        "_element": element,
+    }])
+
+    darwin.handle_message({
+        "id": "req-1",
+        "method": "find_element",
+        "params": {"type": "AXButton", "label": "Save"},
+    })
+
+    assert darwin._last_element is element
+    assert responses[0]["result"] == {"found": True, "label": "Save", "type": "AXButton"}
+
+
+def test_handle_message_execute_type_uses_last_element(monkeypatch):
+    element = object()
+    responses = []
+    calls = []
+
+    monkeypatch.setattr(darwin, "write_response", responses.append)
+    monkeypatch.setattr(darwin, "_last_element", element)
+    monkeypatch.setattr(darwin, "_last_element_info", {"label": "Search", "type": "AXTextField"})
+    monkeypatch.setattr(
+        darwin,
+        "_execute_type",
+        lambda received_element, info, value: calls.append((received_element, info, value)) or True,
+    )
+
+    darwin.handle_message({
+        "id": "req-2",
+        "method": "execute_action",
+        "params": {"action": "type", "value": "hello"},
+    })
+
+    assert calls == [(element, {"label": "Search", "type": "AXTextField"}, "hello")]
+    assert responses[0]["result"] == {"typed": "hello", "performed": True}
+
+
 def test_handle_message_check_permissions(monkeypatch):
     responses = []
 

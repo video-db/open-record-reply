@@ -19,6 +19,14 @@ try:
 except ImportError:
     HAS_PYNPUT = False
 
+try:
+    import pyautogui
+    pyautogui.FAILSAFE = False
+    pyautogui.PAUSE = 0.2
+    HAS_PYAUTOGUI = True
+except Exception:
+    HAS_PYAUTOGUI = False
+
 PID_FILE = "/tmp/ax_hook.pid"
 with open(PID_FILE, "w") as f:
     f.write(str(os.getpid()))
@@ -32,6 +40,8 @@ _pending_value = ""
 _pending_action_type = ""
 _listener_mouse = None
 _listener_keyboard = None
+_last_element = None
+_last_element_info = None
 
 
 def write_response(msg):
@@ -110,6 +120,34 @@ def _copy_element_at_position(application, x, y):
     if AX is None:
         return None
     return _ax_call_value(AX.AXUIElementCopyElementAtPosition, application, float(x), float(y), None)
+
+
+def _set_attribute(element, attr_name, value):
+    AX = _get_ax_module()
+    if AX is None:
+        return False
+    try:
+        err, _value = _normalize_ax_result(
+            AX.AXUIElementSetAttributeValue(element, attr_name, value),
+            AX.kAXErrorSuccess,
+        )
+        return err == AX.kAXErrorSuccess
+    except Exception:
+        return False
+
+
+def _perform_action(element, action_name):
+    AX = _get_ax_module()
+    if AX is None:
+        return False
+    try:
+        err, _value = _normalize_ax_result(
+            AX.AXUIElementPerformAction(element, action_name),
+            AX.kAXErrorSuccess,
+        )
+        return err == AX.kAXErrorSuccess
+    except Exception:
+        return False
 
 
 def _to_number(value, field, default=0):
@@ -374,6 +412,7 @@ def _find_elements(el_type="", label="", limit=100):
             score = _label_score(info.get("label", ""), label)
             if label and score == 0:
                 continue
+            info["_element"] = element
             info["found"] = True
             matches.append((score, info))
             if len(matches) >= limit:
@@ -382,6 +421,76 @@ def _find_elements(el_type="", label="", limit=100):
             break
     matches.sort(key=lambda item: item[0], reverse=True)
     return [item[1] for item in matches]
+
+
+def _public_info(info):
+    public = dict(info)
+    public.pop("_element", None)
+    return public
+
+
+def _center_of(info):
+    return (
+        int(info.get("x", 0) + info.get("width", 0) / 2),
+        int(info.get("y", 0) + info.get("height", 0) / 2),
+    )
+
+
+def _click_info(info):
+    if not HAS_PYAUTOGUI:
+        return False
+    x, y = _center_of(info)
+    try:
+        pyautogui.click(x, y)
+        return True
+    except Exception:
+        return False
+
+
+def _type_with_pyautogui(info, value):
+    if not HAS_PYAUTOGUI:
+        return False
+    try:
+        _click_info(info)
+        time.sleep(0.2)
+        pyautogui.hotkey("command", "a")
+        time.sleep(0.05)
+        pyautogui.write(str(value))
+        return True
+    except Exception:
+        return False
+
+
+def _execute_click(element, info):
+    AX = _get_ax_module()
+    press_action = _ax_attr("kAXPressAction", "AXPress")
+    if element is not None and AX is not None and _perform_action(element, press_action):
+        return True
+    return _click_info(info)
+
+
+def _execute_type(element, info, value):
+    AX = _get_ax_module()
+    value_attr = _ax_attr("kAXValueAttribute", "AXValue")
+    if element is not None and AX is not None:
+        _perform_action(element, _ax_attr("kAXRaiseAction", "AXRaise"))
+        if _set_attribute(element, value_attr, str(value)):
+            return True
+    return _type_with_pyautogui(info, value)
+
+
+def _execute_select(element, info, value):
+    clicked = _execute_click(element, info)
+    if not HAS_PYAUTOGUI:
+        return clicked
+    try:
+        time.sleep(0.3)
+        pyautogui.write(str(value))
+        time.sleep(0.1)
+        pyautogui.press("enter")
+        return True
+    except Exception:
+        return clicked
 
 
 def _is_input_control(el_info):
@@ -486,7 +595,7 @@ def _on_press(key):
 
 
 def handle_message(msg):
-    global is_recording, events_file
+    global is_recording, events_file, _last_element, _last_element_info
     global _listener_mouse, _listener_keyboard, _pending_type_target, _pending_value, _pending_action_type
 
     rid = msg["id"]
@@ -537,8 +646,12 @@ def handle_message(msg):
         label = params.get("label", "")
         matches = _find_elements(el_type, label, limit=1)
         if matches:
-            write_response({"id": rid, "status": "ok", "result": matches[0]})
+            _last_element = matches[0].get("_element")
+            _last_element_info = _public_info(matches[0])
+            write_response({"id": rid, "status": "ok", "result": _last_element_info})
         else:
+            _last_element = None
+            _last_element_info = None
             write_response({"id": rid, "status": "ok", "result": {
                 "found": False, "label": label, "type": el_type
             }})
@@ -546,7 +659,9 @@ def handle_message(msg):
     elif method == "find_all_elements":
         el_type = params.get("type", "")
         matches = _find_elements(el_type, limit=100)
-        write_response({"id": rid, "status": "ok", "result": {"elements": matches}})
+        write_response({"id": rid, "status": "ok", "result": {
+            "elements": [_public_info(match) for match in matches]
+        }})
 
     elif method == "check_permissions":
         trusted = _is_accessibility_trusted(prompt=params.get("prompt", False))
@@ -562,15 +677,28 @@ def handle_message(msg):
 
     elif method == "execute_action":
         action = params.get("action", "")
+        info = _last_element_info or {}
         if action == "click":
-            write_response({"id": rid, "status": "ok", "result": {"clicked": True}})
+            clicked = _execute_click(_last_element, info)
+            write_response({"id": rid, "status": "ok", "result": {"clicked": clicked}})
         elif action == "type":
-            write_response({"id": rid, "status": "ok", "result": {"typed": params.get("value", "")}})
+            value = params.get("value", "")
+            typed = _execute_type(_last_element, info, value)
+            write_response({"id": rid, "status": "ok", "result": {"typed": value, "performed": typed}})
         elif action == "select":
-            write_response({"id": rid, "status": "ok", "result": {"selected": params.get("value", "")}})
+            value = params.get("value", "")
+            selected = _execute_select(_last_element, info, value)
+            write_response({"id": rid, "status": "ok", "result": {"selected": value, "performed": selected}})
         elif action == "click_at":
             x, y = params.get("x", 0), params.get("y", 0)
-            write_response({"id": rid, "status": "ok", "result": {"clicked_at": {"x": x, "y": y}}})
+            clicked = False
+            if HAS_PYAUTOGUI:
+                try:
+                    pyautogui.click(x, y)
+                    clicked = True
+                except Exception:
+                    clicked = False
+            write_response({"id": rid, "status": "ok", "result": {"clicked_at": {"x": x, "y": y}, "performed": clicked}})
         else:
             write_response({"id": rid, "status": "error", "error": {
                 "code": "INVALID_ACTION", "message": f"Unknown action: {action}"
