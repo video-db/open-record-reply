@@ -9,6 +9,38 @@ INPUT:
 2. Scene descriptions — AI descriptions of the screen at each moment
 3. Skill name
 
+## Workflow Comprehension
+Before writing the SKILL, step back and understand the full recording:
+
+1. Identify the HIGH-LEVEL TASK the user is accomplishing from the event sequence
+   and scene descriptions. What is the start state, what is the goal, and what
+   happens in between? (e.g., "opening YouTube and searching for a video, then
+   playing a result" — not "clicked element at X, typed Y, clicked Z")
+
+2. Clean the event stream as a human observer would:
+   - Navigation shortcuts (typing part of a site name in an address bar to
+     autocomplete and navigate) are part of reaching the starting state — describe
+     them briefly, but don't turn them into skill inputs
+   - Rapid interactions on the same element (click then type, click then
+     click) form a single logical step — merge when appropriate
+   - Type events on one element immediately followed by interaction on a
+     DIFFERENT element may indicate autocomplete echo or a partial keystroke
+     that should be folded into context rather than a separate step
+   - Clicks in the video player area during playback are likely ad-skipping,
+     pausing, or resuming — describe their apparent purpose
+
+3. The skill's DESCRIPTION must state the TASK OUTCOME (what was accomplished)
+   and when an agent should use it, not the mechanics of individual steps.
+
+4. VERIFICATION must be derived from the TASK OUTCOME. Ask: what visible
+   evidence on screen proves this task was achieved? Check the end state
+   (e.g., watch page loaded, video playing) — not incidental intermediate
+   states (e.g., an ad that happened to play).
+
+5. Output the verification checks in a field named exactly "verification"
+   (not "verifications"). Each check is: {"type": "ax_element" | "visual" |
+   "transcript", "check": "description of what to verify"}.
+
 RULES:
 
 ## Action Types

@@ -610,7 +610,7 @@ def _prefilter_events(events: list[dict], screen_h: int = 1080, screen_w: int = 
                 filtered.pop()
             skip_next = False
             continue
-        pos = e.get("position", {})
+        pos = e.get("position") or _parse_position_from_label(e.get("target", {}).get("label", ""))
         if pos:
             x, y = pos.get("x", 0), pos.get("y", 0)
             if y > screen_h - 40:
@@ -621,6 +621,13 @@ def _prefilter_events(events: list[dict], screen_h: int = 1080, screen_w: int = 
                 continue
         filtered.append(e)
     return filtered
+
+
+def _parse_position_from_label(label: str) -> dict | None:
+    m = re.match(r"element_at_(\d+)_(\d+)", str(label))
+    if m:
+        return {"x": int(m.group(1)), "y": int(m.group(2))}
+    return None
 
 
 def _build_events_only_prompt(name: str, events: list[dict], metadata: dict) -> str:
@@ -703,7 +710,12 @@ def _normalize_llm_output(skill: dict, name: str) -> dict:
     skill["steps"] = normalized_steps
 
     norm_verification = []
-    for raw_check in skill.get("verification", []) or []:
+    verifications_sources = []
+    if "verifications" in skill:
+        verifications_sources.extend(skill["verifications"])
+    if "verification" in skill:
+        verifications_sources.extend(skill["verification"])
+    for raw_check in verifications_sources:
         if isinstance(raw_check, str):
             check_type = "ax_element"
             check = raw_check
@@ -711,9 +723,15 @@ def _normalize_llm_output(skill: dict, name: str) -> dict:
             check_type = raw_check.get("type", "ax_element")
             if check_type == "element_present":
                 check_type = "ax_element"
+            if check_type == "primary":
+                check_type = "visual"
+            if check_type == "secondary":
+                check_type = "ax_element"
+            if check_type == "fallback":
+                check_type = "ax_element"
             if check_type not in {"ax_element", "visual", "transcript"}:
                 check_type = "ax_element"
-            check = raw_check.get("check") or raw_check.get("description") or ""
+            check = raw_check.get("check") or raw_check.get("description") or raw_check.get("assertion") or raw_check.get("how_to_check") or ""
         else:
             continue
 
@@ -721,6 +739,7 @@ def _normalize_llm_output(skill: dict, name: str) -> dict:
         if check and not _is_generic_verification_check(check):
             norm_verification.append({"type": check_type, "check": check})
 
+    skill.pop("verifications", None)
     skill["verification"] = norm_verification or _synthesize_verification(skill)
 
     return skill
