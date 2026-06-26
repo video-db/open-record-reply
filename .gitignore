@@ -1,0 +1,34 @@
+# Secrets
+.env
+
+# Virtual environment
+.venv/
+
+# Bytecode cache
+__pycache__/
+*.pyc
+
+# Test cache
+.pytest_cache/
+
+# IDE / editor config
+opencode.json
+.vscode/
+.idea/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+@*
+
+# Runtime output
+skills/*.json
+skills/*.md

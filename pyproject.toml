@@ -1,0 +1,31 @@
+[project]
+name = "mcp-videodb-record-replay"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "videodb[capture]",
+    "mcp>=1.0.0",
+    "python-dotenv>=1.0.0",
+    "jsonschema>=4.20.0",
+    "pyautogui>=0.9.54",
+    "pynput>=1.8.2",
+    "uiautomation>=2.0.29",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+only-include = ["*.py", "capture/", "compiler/", "schema/", "skills/"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SKILL",
+  "type": "object",
+  "required": ["name", "description", "preconditions", "inputs", "steps", "verification", "video_id"],
+  "properties": {
+    "name": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+    "description": {"type": "string"},
+    "preconditions": {"type": "array", "items": {"type": "string"}},
+    "start_context": {
+      "type": "object",
+      "required": ["kind", "label", "instructions"],
+      "properties": {
+        "kind": {
+          "enum": ["web", "desktop_app", "file", "terminal", "workspace", "screen_state", "unknown"]
+        },
+        "label": {"type": "string"},
+        "locator": {"type": "string"},
+        "instructions": {"type": "string"},
+        "evidence": {"type": "string"}
+      }
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["type", "example"],
+        "properties": {
+          "type": {"enum": ["string", "number", "enum"]},
+          "format": {"type": "string"},
+          "example": {},
+          "values": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "action", "target", "recording_ref"],
+        "properties": {
+          "id": {"type": "integer", "minimum": 1},
+          "action": {"enum": ["click", "type", "select", "navigate", "wait"]},
+          "target": {
+            "type": "object",
+            "required": ["type", "label"],
+            "properties": {
+              "type": {"type": "string"},
+              "label": {"type": "string"}
+            }
+          },
+          "value": {"type": ["string", "null"]},
+          "visual_context": {"type": "string"},
+          "recording_ref": {
+            "type": "object",
+            "required": ["start", "end"],
+            "properties": {
+              "start": {"type": "number", "minimum": 0},
+              "end": {"type": "number", "minimum": 0}
+            }
+          }
+        }
+      }
+    },
+    "verification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "check"],
+        "properties": {
+          "type": {"enum": ["ax_element", "visual", "transcript"]},
+          "check": {"type": "string"}
+        }
+      }
+    },
+    "video_id": {"type": "string"},
+    "scene_index_id": {"type": "string"},
+    "version": {"type": "integer", "minimum": 1},
+    "compiled_at": {"type": "string", "format": "date-time"}
+  }
+}
