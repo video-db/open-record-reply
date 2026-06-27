@@ -141,6 +141,7 @@ async def record_skill(name: str, lead_in_seconds: float = 0.0) -> dict:
             "ax_permission_warning": ax_permission_warning,
             "lead_in_seconds": lead_in_seconds,
             "workflow_starts_at_epoch_ms": state.effective_recording_start_epoch_ms,
+            **_operator_recording_guidance(lead_in_seconds),
         }
 
     try:
@@ -206,6 +207,7 @@ async def record_skill(name: str, lead_in_seconds: float = 0.0) -> dict:
                         "ax_permission_warning": ax_permission_warning,
                         "lead_in_seconds": lead_in_seconds,
                         "workflow_starts_at_epoch_ms": state.effective_recording_start_epoch_ms,
+                        **_operator_recording_guidance(lead_in_seconds),
                     }
                 if event.get("event") == "recording-complete":
                     await _abort_capture()
@@ -231,6 +233,7 @@ async def record_skill(name: str, lead_in_seconds: float = 0.0) -> dict:
             "ax_permission_warning": ax_permission_warning,
             "lead_in_seconds": lead_in_seconds,
             "workflow_starts_at_epoch_ms": state.effective_recording_start_epoch_ms,
+            **_operator_recording_guidance(lead_in_seconds),
         }
     except Exception as e:
         await _abort_capture()
@@ -354,6 +357,27 @@ async def _poll_export(session_id: str, collection_id: str, timeout: int = 120) 
                 return None
         await asyncio.sleep(EXPORT_POLL_INTERVAL_SECONDS)
     return None
+
+
+def _operator_recording_guidance(lead_in_seconds: float) -> dict:
+    lead_in_text = (
+        f"after the {lead_in_seconds:g}-second lead-in"
+        if lead_in_seconds > 0
+        else "now"
+    )
+    return {
+        "next_step": (
+            "Tell the human operator that recording is active, ask them to perform "
+            f"the workflow manually {lead_in_text}, then wait until they say stop."
+        ),
+        "operator_instructions": [
+            "Recording is human-in-the-loop: the agent starts/stops/compiles, and the human performs the UI workflow.",
+            "After this tool returns, do not inspect the repo, drive the browser, or automate the target app unless the user explicitly asks you to demonstrate the workflow yourself.",
+            "Announce that recording has started and when the operator should begin.",
+            "Wait for the operator to say stop before calling stop_recording_tool.",
+            "After stopping, compile the skill with compile_skill_tool and set up the generated SKILL.md.",
+        ],
+    }
 
 
 async def _abort_capture():

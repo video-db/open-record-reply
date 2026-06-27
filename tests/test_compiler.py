@@ -12,6 +12,9 @@ from compiler.compiler import (
     _ground_steps_in_matched_events,
     _match_events_to_scenes,
     _normalize_llm_output,
+    _normalize_execution_strategy,
+    _attach_recorded_surfaces,
+    _attach_step_surfaces_from_events,
     _trim_events_to_effective_start,
     _trim_events_to_effective_window,
 )
@@ -108,6 +111,76 @@ class TestNormalizeLlmOutput:
             "instructions": "Open the upload dialog before running the steps.",
             "evidence": "The recording shows YouTube Studio.",
         }
+        assert result["execution_strategy"]["surface"] == "web_browser"
+        assert result["execution_strategy"]["preferred_tools"] == ["native_accessibility"]
+        assert result["execution_strategy"]["fallback_tools"] == ["visual_computer_use"]
+
+    def test_infers_desktop_execution_strategy(self):
+        raw = {
+            "start_context": {
+                "kind": "desktop_app",
+                "label": "Slack desktop",
+                "instructions": "Slack is open to the target channel.",
+            },
+            "steps": [],
+        }
+
+        result = _normalize_llm_output(raw, "test")
+
+        assert result["execution_strategy"]["surface"] == "desktop_app"
+        assert result["execution_strategy"]["preferred_tools"] == ["native_accessibility"]
+        assert any("UI Automation" in note for note in result["execution_strategy"]["notes"])
+
+    def test_normalizes_explicit_hybrid_execution_strategy(self):
+        raw = {
+            "start_context": {
+                "kind": "web",
+                "label": "YouTube Studio",
+                "instructions": "YouTube Studio upload flow is open.",
+            },
+            "execution_strategy": {
+                "surface": "hybrid",
+                "preferred_tools": ["browser automation", "AX"],
+                "fallback_tools": ["computer-use", "computer-use"],
+                "notes": ["Use browser controls for web page steps."],
+            },
+            "steps": [],
+        }
+
+        result = _normalize_llm_output(raw, "test")
+
+        assert result["execution_strategy"] == {
+            "surface": "hybrid",
+            "preferred_tools": ["native_accessibility"],
+            "fallback_tools": ["visual_computer_use"],
+            "notes": ["Use browser controls for web page steps."],
+        }
+
+    def test_default_hybrid_execution_strategy_is_native_first(self):
+        raw = {
+            "start_context": {
+                "kind": "web",
+                "label": "Browser upload with file picker",
+                "instructions": "The browser upload form is open.",
+            },
+            "execution_strategy": {"surface": "hybrid"},
+            "steps": [],
+        }
+
+        result = _normalize_llm_output(raw, "test")
+
+        assert result["execution_strategy"]["surface"] == "hybrid"
+        assert result["execution_strategy"]["preferred_tools"] == ["native_accessibility"]
+        assert result["execution_strategy"]["fallback_tools"] == ["visual_computer_use"]
+
+    def test_execution_strategy_falls_back_for_invalid_values(self):
+        strategy = _normalize_execution_strategy(
+            {"surface": "not-real", "preferred_tools": [], "fallback_tools": []},
+            {"kind": "terminal"},
+        )
+
+        assert strategy["surface"] == "terminal"
+        assert strategy["preferred_tools"] == ["terminal"]
 
     def test_preserves_existing_fields(self):
         raw = {
@@ -198,6 +271,91 @@ class TestNormalizeLlmOutput:
         result = _normalize_llm_output(raw, "test")
 
         assert result["verification"] == [{"type": "ax_element", "check": "Saved as private"}]
+
+    def test_normalizes_recorded_surface_and_step_surface(self):
+        raw = {
+            "recorded_surface": {
+                "platform": "darwin",
+                "app_name": "Safari",
+                "process_id": "123",
+                "window_title": "Example",
+                "window_bounds": {"x": "0", "y": "25", "width": "1200", "height": "800"},
+            },
+            "steps": [
+                {
+                    "action": "click",
+                    "target": {"type": "AXButton", "label": "Submit"},
+                    "surface": {
+                        "platform": "darwin",
+                        "app_name": "Safari",
+                        "relative_position": {"x": "40", "y": "50"},
+                    },
+                },
+            ],
+        }
+
+        result = _normalize_llm_output(raw, "test")
+
+        assert result["recorded_surface"] == {
+            "platform": "darwin",
+            "app_name": "Safari",
+            "process_id": 123,
+            "window_title": "Example",
+            "window_bounds": {"x": 0, "y": 25, "width": 1200, "height": 800},
+        }
+        assert result["steps"][0]["surface"] == {
+            "platform": "darwin",
+            "app_name": "Safari",
+            "relative_position": {"x": 40, "y": 50},
+        }
+
+    def test_augments_generic_upload_and_chat_inputs(self):
+        raw = {
+            "description": "Attach a file to a team chat conversation and send a message.",
+            "inputs": {
+                "message": {
+                    "type": "string",
+                    "example": "Please review this.",
+                    "description": "Message to send with the file.",
+                },
+            },
+            "steps": [
+                {
+                    "action": "click",
+                    "target": {"type": "AXButton", "label": "Attach"},
+                    "visual_context": "The chat composer shows an attach file button.",
+                },
+                {
+                    "action": "click",
+                    "target": {"type": "AXButton", "label": "Open"},
+                    "visual_context": "The file picker is open and ready to choose a file.",
+                },
+            ],
+        }
+
+        result = _normalize_llm_output(raw, "test")
+
+        assert "file_path" in result["inputs"]
+        assert result["inputs"]["file_path"]["example"] == "/path/to/file.ext"
+        assert "target_conversation" in result["inputs"]
+        assert "Slack" not in result["inputs"]["target_conversation"]["description"]
+
+    def test_does_not_add_file_path_without_upload_context(self):
+        raw = {
+            "description": "Search a website and open a result.",
+            "steps": [
+                {
+                    "action": "type",
+                    "target": {"type": "AXTextField", "label": "Search"},
+                    "value": "{{query}}",
+                    "visual_context": "A search field is visible.",
+                },
+            ],
+        }
+
+        result = _normalize_llm_output(raw, "test")
+
+        assert "file_path" not in result["inputs"]
 
 class TestGroundStepsInMatchedEvents:
     def test_rebuilds_steps_from_events_and_scenes(self):
@@ -327,6 +485,70 @@ class TestGroundStepsInMatchedEvents:
         assert skill["steps"][1]["target"]["label"] == "YouTube search bar"
         assert skill["steps"][1]["value"] == "{{search_query}}"
         assert skill["steps"][2]["target"]["label"] == "Submit"
+
+    def test_copies_surface_metadata_from_matched_events(self):
+        surface = {
+            "platform": "darwin",
+            "app_name": "Safari",
+            "process_id": 123,
+            "window_title": "Example",
+            "window_bounds": {"x": 0, "y": 25, "width": 1200, "height": 800},
+            "relative_position": {"x": 50, "y": 75},
+        }
+        skill = {
+            "steps": [
+                {
+                    "id": 1,
+                    "action": "click",
+                    "target": {"type": "AXButton", "label": "Submit"},
+                    "recording_ref": {"start": 0, "end": 1},
+                },
+            ],
+            "verification": [],
+        }
+        matched = [
+            {
+                "event": {
+                    "event": "action",
+                    "action": "click",
+                    "target": {"type": "AXButton", "label": "Submit"},
+                    "surface": surface,
+                },
+                "scene_description": "Safari shows the submit form.",
+                "video_time": 1,
+                "scene_start": 0,
+                "scene_end": 2,
+            },
+        ]
+
+        _ground_steps_in_matched_events(skill, matched)
+        _attach_recorded_surfaces(skill)
+
+        assert skill["steps"][0]["surface"] == surface
+        assert skill["recorded_surface"] == surface
+
+    def test_attach_step_surfaces_from_events_by_order(self):
+        surface = {
+            "platform": "darwin",
+            "app_name": "Slack",
+            "process_id": 456,
+            "window_title": "testing",
+        }
+        skill = {
+            "steps": [
+                {"id": 1, "action": "click", "target": {"type": "AXButton", "label": "A"}, "recording_ref": {"start": 0, "end": 1}},
+            ],
+        }
+        events = [
+            {"event": "action", "action": "click", "target": {"type": "AXButton", "label": "A"}, "surface": surface},
+        ]
+
+        _attach_step_surfaces_from_events(skill, events)
+        _attach_recorded_surfaces(skill)
+
+        assert skill["steps"][0]["surface"] == surface
+        assert skill["recorded_surface"] == surface
+
     def test_match_events_to_scenes_uses_semantic_sequence(self):
         start_ms = 100000
         events = [

@@ -154,6 +154,23 @@ FALLBACK (when recording ends before confirmation):
 For each input, provide: type ("string", "number", "enum"), optional "format" (e.g. "YYYY-MM-DD"), and "example" from the recording. For enum types, include "values" array.
 Also include a "description" field for each input — a short phrase describing where this field appears on screen and what format it expects (e.g., "The date field in the top section of the form, grey label"). This description will be used to generate natural-language skill instructions.
 
+## Standalone Skill Inputs
+The generated skill must be usable from SKILL.md alone. Prefer reusable user-provided
+inputs over recorded literals.
+
+- For file upload or attachment workflows, include `file_path` as a string input.
+  It represents the full local path supplied by the user at run time. Do not
+  hardcode a recorded local path in the skill. You may also include `file_name`
+  only when the visible filename is useful for verification.
+- For chat, messaging, collaboration, or social-posting workflows, include
+  `target_conversation` as a string input when the destination channel, DM, thread,
+  recipient, workspace, or conversation can vary.
+- For user-authored message text, prefer a single reusable `message` or
+  `confirmation_message` input instead of splitting one message into recording-specific
+  fragments unless the UI truly has multiple fields.
+- Preserve fixed UI labels such as "Upload from your computer" as enum options or step
+  instructions, not as hardcoded destination/file inputs.
+
 ## Task-Level Understanding
 Before writing steps, look at the FULL event sequence AND scene descriptions to infer:
 - WHAT was the user trying to accomplish? (e.g., "Search YouTube and play a specific song")

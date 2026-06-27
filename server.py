@@ -93,14 +93,21 @@ async def request_capture_permissions_tool() -> dict:
 
 @mcp.tool()
 async def record_skill_tool(name: str, lead_in_seconds: float = 0.0) -> dict:
-    """Start recording a workflow that will later be compiled into a skill."""
+    """Start a human-in-the-loop workflow recording.
+
+    The agent should call this tool, tell the human operator when recording is
+    active and when to begin after the lead-in, then wait. The human performs
+    the UI actions being recorded. Do not drive the target app with browser,
+    desktop, or shell automation during recording unless the user explicitly
+    asks the agent to demonstrate the workflow.
+    """
     await _ensure_connected()
     return await record_skill(name, lead_in_seconds=lead_in_seconds)
 
 
 @mcp.tool()
 async def stop_recording_tool(trim_end_seconds: float = 0.0) -> dict:
-    """Stop the active recording and return its event log and VideoDB video id."""
+    """Stop the active human-operated recording after the user says stop."""
     return await stop_recording(trim_end_seconds=trim_end_seconds)
 
 
