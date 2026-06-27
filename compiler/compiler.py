@@ -439,7 +439,10 @@ def _ground_steps_in_matched_events(skill_json: dict, matched: list[dict]) -> No
             and not str(llm_target.get("label", "")).startswith("element_at_")
         )
         if llm_has_semantic_label and event_label_is_positional:
-            target = llm_target
+            target = dict(llm_target) if isinstance(llm_target, dict) else {"type": "element", "label": str(llm_target)}
+            for key in ("automation_id", "class_name", "help_text", "foreground_window"):
+                if key not in target and event_target.get(key):
+                    target[key] = event_target[key]
         else:
             target = event_target
 
@@ -711,6 +714,7 @@ def _normalize_llm_output(skill: dict, name: str) -> dict:
         skill.get("start_context"),
         skill["preconditions"],
     )
+    skill["required_tools"] = _normalize_required_tools(skill.get("required_tools"))
 
     normalized_steps = []
     for i, raw_step in enumerate(skill.get("steps", []) or []):
@@ -881,7 +885,12 @@ def _normalize_target(target: object) -> dict:
         return {"type": "element", "label": "target element"}
     target_type = target.get("type") or target.get("role") or target.get("kind") or "element"
     label = target.get("label") or target.get("name") or target.get("text") or target.get("id") or "target element"
-    return {"type": str(target_type), "label": str(label)}
+    result = {"type": str(target_type), "label": str(label)}
+    for key in ("automation_id", "class_name", "help_text", "foreground_window"):
+        value = target.get(key, "")
+        if value:
+            result[key] = str(value)
+    return result
 
 
 def _normalize_recording_ref(ref: object, index: int) -> dict:
@@ -973,6 +982,40 @@ def _redact_sensitive_value(value: object) -> object:
     if any(re.search(pattern, value) for pattern in sensitive):
         return "[REDACTED]"
     return value
+
+def _normalize_required_tools(tools) -> list[dict]:
+    if not isinstance(tools, list):
+        return _default_required_tools()
+    valid_names = {
+        "browser_automation", "visual_automation", "shell_execution",
+        "file_system_access", "keyboard_input", "ui_element_inspection",
+        "video_reference",
+    }
+    normalized = []
+    for entry in tools:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name", "")).strip().lower().replace(" ", "_")
+        reason = str(entry.get("reason", "")).strip()
+        if not name or not reason:
+            continue
+        if name not in valid_names:
+            continue
+        kind = str(entry.get("kind", "recommended")).strip().lower()
+        if kind not in {"recommended", "fallback", "optional"}:
+            kind = "recommended"
+        normalized.append({"name": name, "reason": reason, "kind": kind})
+    if not normalized:
+        return _default_required_tools()
+    return normalized
+
+
+def _default_required_tools() -> list[dict]:
+    return [
+        {"name": "visual_automation", "reason": "Click, type, and visually identify elements on screen.", "kind": "recommended"},
+        {"name": "shell_execution", "reason": "Open applications and navigate via shell commands.", "kind": "optional"},
+    ]
+
 
 def _normalize_inputs(inputs) -> dict:
     normalized = {}

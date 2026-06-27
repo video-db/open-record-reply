@@ -44,9 +44,10 @@ _keyboard_thread = None
 _keyboard_stop = threading.Event()
 _last_click_pos = None
 _last_click_ts = 0
-_enter_pressed = False
+_last_click_target_info = None
 
 VK_LBUTTON = 0x01
+VK_TAB = 0x09
 VK_SHIFT = 0x10
 VK_CONTROL = 0x11
 VK_CAPITAL = 0x14
@@ -229,30 +230,133 @@ class POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
 
+def _find_nearby_label(ctrl, max_distance=80):
+    try:
+        cr = ctrl.BoundingRectangle
+        cx = cr.left + cr.width() / 2
+        cy = cr.top + cr.height() / 2
+    except Exception:
+        return ""
+    try:
+        parent = ctrl.GetParentControl()
+    except Exception:
+        return ""
+    if not parent:
+        return ""
+    try:
+        children = parent.GetChildren()
+    except Exception:
+        return ""
+    best_text = ""
+    best_dist = float("inf")
+    for child in children:
+        if child is ctrl:
+            continue
+        if not isinstance(child, auto.TextControl):
+            continue
+        try:
+            tr = child.BoundingRectangle
+            child_text = child.Name or ""
+        except Exception:
+            continue
+        if not child_text.strip():
+            continue
+        tx = tr.left + tr.width() / 2
+        ty = tr.top + tr.height() / 2
+        dist = ((cx - tx) ** 2 + (cy - ty) ** 2) ** 0.5
+        if dist <= max_distance and dist < best_dist:
+            best_dist = dist
+            best_text = child_text.strip()
+    return best_text
+
+
+def _get_foreground_window_title():
+    try:
+        fg = auto.GetForegroundControl()
+        if fg:
+            title = fg.Name or ""
+            if title:
+                return title
+    except Exception:
+        pass
+    try:
+        root = auto.GetRootControl()
+        if root:
+            title = root.Name or ""
+            if title:
+                return title
+    except Exception:
+        pass
+    try:
+        hwnd = user32.GetForegroundWindow()
+        if hwnd:
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                return buf.value or ""
+    except Exception:
+        pass
+    return ""
+
+
 def _find_element_at_point(x, y):
     try:
         ctrl = auto.ControlFromPoint(x, y)
         if ctrl is None:
-            return {"x": x, "y": y, "width": 120, "height": 30, "label": "", "type": "AXButton", "control": None}
+            return {"x": x, "y": y, "width": 120, "height": 30, "label": "", "type": "AXButton", "control": None, "automation_id": "", "class_name": "", "help_text": "", "foreground_window": _get_foreground_window_title()}
         ax_type = TYPE_MAP_REVERSE.get(type(ctrl))
         if ax_type is None:
             for cls, ax_name in TYPE_MAP_REVERSE.items():
                 if isinstance(ctrl, cls):
                     ax_type = ax_name
                     break
-        name = ""
+        automation_id = ""
         try:
-            name = ctrl.Name or ""
+            automation_id = ctrl.AutomationId or ""
         except Exception:
             pass
+        class_name = ""
+        try:
+            class_name = ctrl.ClassName or ""
+        except Exception:
+            pass
+        help_text = ""
+        try:
+            help_text = ctrl.HelpText or ""
+        except Exception:
+            pass
+        label = ""
+        try:
+            label = ctrl.Name or ""
+        except Exception:
+            pass
+        if not label:
+            label = automation_id
+        if not label:
+            label = class_name
+        if not label:
+            label = help_text
+        if not label:
+            try:
+                parent = ctrl.GetParentControl()
+                if parent:
+                    label = parent.Name or ""
+            except Exception:
+                pass
+        if not label:
+            label = _find_nearby_label(ctrl)
+        foreground_window = _get_foreground_window_title()
         try:
             rect = ctrl.BoundingRectangle
         except Exception:
-            return {"x": x, "y": y, "width": 120, "height": 30, "label": name, "type": ax_type, "control": ctrl}
+            return {"x": x, "y": y, "width": 120, "height": 30, "label": label, "type": ax_type, "control": ctrl, "automation_id": automation_id, "class_name": class_name, "help_text": help_text, "foreground_window": foreground_window}
         return {"x": rect.left, "y": rect.top, "width": rect.width(), "height": rect.height(),
-                "label": name, "type": ax_type or "AXButton", "control": ctrl}
+                "label": label, "type": ax_type or "AXButton", "control": ctrl,
+                "automation_id": automation_id, "class_name": class_name, "help_text": help_text,
+                "foreground_window": foreground_window}
     except Exception:
-        return {"x": x, "y": y, "width": 120, "height": 30, "label": "", "type": "AXButton", "control": None}
+        return {"x": x, "y": y, "width": 120, "height": 30, "label": "", "type": "AXButton", "control": None, "automation_id": "", "class_name": "", "help_text": "", "foreground_window": ""}
 
 
 def _is_input_ctrl(ctrl):
@@ -282,7 +386,30 @@ def _finalize_pending(ts_ms=None):
         except Exception:
             pass
         ax_type = TYPE_MAP_REVERSE.get(type(_pending_ctrl), "AXTextField")
-        target = {"type": ax_type, "label": label, "role": ax_type}
+        automation_id = ""
+        try:
+            automation_id = _pending_ctrl.AutomationId or ""
+        except Exception:
+            pass
+        class_name = ""
+        try:
+            class_name = _pending_ctrl.ClassName or ""
+        except Exception:
+            pass
+        help_text = ""
+        try:
+            help_text = _pending_ctrl.HelpText or ""
+        except Exception:
+            pass
+        target = {
+            "type": ax_type,
+            "label": label,
+            "role": ax_type,
+            "automation_id": automation_id,
+            "class_name": class_name,
+            "help_text": help_text,
+            "foreground_window": _get_foreground_window_title(),
+        }
         write_event({"event": "action", "ts": ts, "action": _pending_type, "target": target, "value": val})
     _pending_ctrl = None
     _pending_type = ""
@@ -291,7 +418,7 @@ def _finalize_pending(ts_ms=None):
 
 def _on_click(x, y, ts):
     global _pending_ctrl, _pending_type, _initial_value
-    global _last_click_pos, _last_click_ts, _enter_pressed
+    global _last_click_pos, _last_click_ts, _last_click_target_info
 
     buffer_text = "".join(_keyboard_buffer)
 
@@ -309,6 +436,7 @@ def _on_click(x, y, ts):
 
     _last_click_pos = (x, y)
     _last_click_ts = ts
+    _last_click_target_info = el_info
 
     if _is_input_ctrl(ctrl):
         _pending_ctrl = ctrl
@@ -327,6 +455,10 @@ def _on_click(x, y, ts):
             "type": el_type,
             "label": label if label else f"element_at_{x}_{y}",
             "role": el_type,
+            "automation_id": el_info.get("automation_id", ""),
+            "class_name": el_info.get("class_name", ""),
+            "help_text": el_info.get("help_text", ""),
+            "foreground_window": el_info.get("foreground_window", ""),
         }
         evt = {
             "event": "action",
@@ -363,7 +495,7 @@ def _get_clipboard_text():
 
 
 def _keyboard_loop():
-    global _keyboard_buffer, _enter_pressed
+    global _keyboard_buffer
     prev = {}
     while not _keyboard_stop.is_set():
         time.sleep(0.03)
@@ -392,9 +524,19 @@ def _keyboard_loop():
                 _keyboard_buffer.pop()
         prev["_bk"] = bk
         enter = _key_pressed(VK_RETURN)
-        if enter and not prev.get("_ent", False):
-            _enter_pressed = True
+        tab = _key_pressed(VK_TAB)
+        enter_edge = enter and not prev.get("_ent", False)
+        tab_edge = tab and not prev.get("_tab", False)
+        if enter_edge or tab_edge:
+            ts = int(time.time() * 1000)
+            buffer_text = "".join(_keyboard_buffer)
+            if _pending_ctrl is not None:
+                _finalize_pending(ts)
+            elif buffer_text.strip():
+                _emit_type_for_last_click(buffer_text, ts)
+            _keyboard_buffer.clear()
         prev["_ent"] = enter
+        prev["_tab"] = tab
         if ctrl and _key_pressed(VK_V) and not prev.get("_cv", False):
             clip = _get_clipboard_text()
             if clip:
@@ -403,13 +545,19 @@ def _keyboard_loop():
 
 
 def _emit_type_for_last_click(text, ts):
+    global _last_click_target_info
     if not _last_click_pos or not text.strip():
         return
     x, y = _last_click_pos
+    info = _last_click_target_info or {}
     target = {
         "type": "AXTextField",
-        "label": f"element_at_{x}_{y}",
+        "label": info.get("label") or f"element_at_{x}_{y}",
         "role": "AXTextField",
+        "automation_id": info.get("automation_id", ""),
+        "class_name": info.get("class_name", ""),
+        "help_text": info.get("help_text", ""),
+        "foreground_window": info.get("foreground_window", ""),
     }
     write_event({"event": "action", "ts": ts, "action": "type", "target": target, "value": text})
 
@@ -444,7 +592,7 @@ def _start_input_listeners():
 
 def _stop_input_listeners():
     global _poll_thread, _pending_ctrl, _pending_type, _initial_value
-    global _keyboard_thread, _last_click_pos, _last_click_ts, _enter_pressed
+    global _keyboard_thread, _last_click_pos, _last_click_ts, _last_click_target_info
 
     _finalize_pending()
     buffer_text = "".join(_keyboard_buffer)
@@ -465,7 +613,7 @@ def _stop_input_listeners():
     _initial_value = ""
     _last_click_pos = None
     _last_click_ts = 0
-    _enter_pressed = False
+    _last_click_target_info = None
 
 
 def handle_message(msg):

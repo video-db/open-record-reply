@@ -73,6 +73,18 @@
         }
       }
     },
+    "required_tools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "reason"],
+        "properties": {
+          "name": {"type": "string"},
+          "reason": {"type": "string"},
+          "kind": {"enum": ["recommended", "fallback", "optional"]}
+        }
+      }
+    },
     "video_id": {"type": "string"},
     "scene_index_id": {"type": "string"},
     "version": {"type": "integer", "minimum": 1},

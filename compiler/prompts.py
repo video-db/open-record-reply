@@ -209,6 +209,74 @@ If only an app or page name is visible, use that as the locator/label instead.
 If the starting surface cannot be identified, use kind "unknown" and describe the
 visible screen state in instructions. Do not invent a URL, app name, or path.
 
+## Required Capabilities
+
+Analyze the recording to determine what capabilities an agent needs to execute
+this skill. Describe WHAT the agent must be able to DO — not which specific
+tool or MCP to use. The agent will map these capabilities to the tools it has
+available. Output a "required_tools" array on the root object. Each entry is:
+
+{
+  "name": "capability_name",
+  "reason": "What the agent must do and why, based on evidence in the recording",
+  "kind": "recommended" | "fallback" | "optional"
+}
+
+### Capability Catalog — Route Based on Evidence
+
+Use these capability names. They describe a class of functionality, not a
+specific tool. The agent decides which of its tools can fulfill each capability.
+
+| Evidence in recording                               | recommended capability     | fallback capability       |
+|-----------------------------------------------------|----------------------------|---------------------------|
+| Browser scenes, web URLs, start_context=web         | browser_automation         | visual_automation         |
+| Desktop app, no browser, start_context=desktop_app  | visual_automation          | ui_element_inspection     |
+| Terminal/CLI visible, start_context=terminal        | shell_execution            | visual_automation         |
+| File manager, save/open dialogs, start_context=file | file_system_access         | visual_automation         |
+| Mixed surfaces (web + desktop + terminal)           | visual_automation          | browser_automation        |
+| Typing into a visible text editor or form           | keyboard_input             | visual_automation         |
+| Clicking OS chrome (taskbar, start menu, system tray) | shell_execution          | visual_automation         |
+
+### Capability Definitions
+
+- **browser_automation** — Click, type, and navigate within a web browser using
+  DOM element selectors or page structure. Works on any website.
+- **visual_automation** — Take screenshots, identify elements visually (by
+  color, position, label text), click at coordinates, type text. Works on any
+  visible UI surface (desktop apps, web, dialogs).
+- **shell_execution** — Run commands in a terminal, open URLs, launch
+  applications, navigate the file system via shell.
+- **file_system_access** — Read, write, create, delete, and list files and
+  directories.
+- **keyboard_input** — Type text and press keys (Enter, Tab, Escape, shortcuts)
+  into the currently focused element or application.
+- **ui_element_inspection** — Query the accessibility/UI automation tree to
+  find elements by name, type, automation ID, or class. Click and interact
+  with them programmatically.
+
+### "optional" Capabilities
+
+Add capabilities under "optional" when they would help but aren't strictly
+needed to complete the task:
+
+- **shell_execution** when a URL, file path, or app launch command appears
+- **file_system_access** when files are opened, saved, or browsed
+- **video_reference** when a screen recording video is available for visual reference
+
+### Rules
+
+- Always output at least one "recommended" capability.
+- "fallback" is a less precise alternative when the recommended capability is
+  not available.
+- Use ONLY capability names from the catalog above — never invent new ones.
+- Base the choice on concrete evidence: start_context.kind, scene descriptions,
+  foreground_window titles, action types, and whether UI elements had semantic
+  labels or only coordinate-based labels.
+- Include 2-5 entries total. Quality over quantity.
+- The "reason" field must describe what the agent needs to do IN THIS SPECIFIC
+  workflow, not a generic definition. Cite visible UI elements, scene
+  descriptions, or actions from the recording.
+
 ## Timestamp Format
 recording_ref timestamps MUST be relative seconds from recording start.
 Format: {"start": <relative_seconds>, "end": <relative_seconds>}.

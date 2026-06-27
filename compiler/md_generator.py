@@ -26,12 +26,24 @@ Output ONLY the markdown file content. Use this exact structure:
 ---
 name: skill-name
 description: "What the skill does and when to use it. Include trigger keywords for implicit AI agent invocation."
+required_tools:
+  recommended:
+    - capability_name (reason)
+  fallback:
+    - other_capability (reason)
+  optional:
+    - extra_capability (reason)
 ---
 
 # Human-Readable Skill Title
 
+## Required Capabilities
+- **capability_name** (recommended) â€" what the agent must be able to do and why
+- **capability_name** (fallback) â€" less precise alternative if the recommended one is unavailable
+- **capability_name** (optional) â€" nice to have but not strictly needed
+
 ## When to use this
-- Precondition 1 â€” describe the state the application must be in
+- Precondition 1 â€" describe the state the application must be in
 - Precondition 2
 - (Use the skill's preconditions as a starting point, but write them as natural prose)
 
@@ -67,6 +79,13 @@ description: "What the skill does and when to use it. Include trigger keywords f
   is and what format it expects.
 - The `description` frontmatter field should be 1-3 sentences. Front-load the key use
   case. Include keywords the agent can use for implicit invocation.
+- Emit `required_tools` from the skill definition as structured YAML in the frontmatter.
+  Group by kind: recommended, fallback, optional. Each entry is the capability name followed
+  by the reason in parentheses on the same line. The capability names describe a class of
+  functionality (browser_automation, visual_automation, shell_execution, etc.) — not specific
+  tools. The agent maps them to whatever tools it has available.
+- In the body, add a "## Required Capabilities" section after the title that lists each
+  capability with its kind and why it is needed for this specific workflow.
 - Keep the skill under 500 lines. Be concise but thorough.
 - Action-oriented language: "Click the...", "Type ... into the...", "Select `option` from the..."
 - Match the Codex skill style: practical, playbook-like instructions, no fluff.
@@ -107,11 +126,16 @@ async def generate_skill_md(skill: dict) -> str:
 def _extract_skill_data(skill: dict) -> dict:
     steps_for_prompt = []
     for step in skill.get("steps", []):
+        tg = step.get("target", {})
         s = {
             "id": step.get("id"),
             "action": step.get("action"),
-            "target_type": step.get("target", {}).get("type", ""),
-            "target_label": step.get("target", {}).get("label", ""),
+            "target_type": tg.get("type", ""),
+            "target_label": tg.get("label", ""),
+            "automation_id": tg.get("automation_id", ""),
+            "class_name": tg.get("class_name", ""),
+            "help_text": tg.get("help_text", ""),
+            "foreground_window": tg.get("foreground_window", ""),
             "visual_context": step.get("visual_context", ""),
             "expected_scene": step.get("expected_scene", ""),
         }
@@ -158,6 +182,7 @@ def _extract_skill_data(skill: dict) -> dict:
         "description": skill.get("description", ""),
         "start_context": skill.get("start_context", {}),
         "preconditions": skill.get("preconditions", []),
+        "required_tools": skill.get("required_tools", []),
         "inputs": inputs_for_prompt,
         "steps": steps_for_prompt,
         "verification": verification,
@@ -227,10 +252,37 @@ def _template_fallback(skill: dict) -> str:
     lines.append("---")
     lines.append(f"name: {name}")
     lines.append(f"description: \"{desc_text}\"")
+
+    required_tools = skill.get("required_tools", [])
+    if required_tools:
+        lines.append("required_tools:")
+        by_kind = {"recommended": [], "fallback": [], "optional": []}
+        for t in required_tools:
+            kind = t.get("kind", "recommended")
+            by_kind.setdefault(kind, []).append(t)
+        for kind in ("recommended", "fallback", "optional"):
+            entries = by_kind.get(kind, [])
+            if entries:
+                lines.append(f"  {kind}:")
+                for t in entries:
+                    lines.append(f"    - {t['name']} ({t['reason']})")
+
     lines.append("---")
     lines.append("")
     lines.append(f"# {name.replace('-', ' ').title()}")
     lines.append("")
+
+    if required_tools:
+        lines.append("## Required Capabilities")
+        by_kind = {"recommended": [], "fallback": [], "optional": []}
+        for t in required_tools:
+            kind = t.get("kind", "recommended")
+            by_kind.setdefault(kind, []).append(t)
+        for kind in ("recommended", "fallback", "optional"):
+            entries = by_kind.get(kind, [])
+            for t in entries:
+                lines.append(f"- **{t['name']}** ({kind}): {t['reason']}")
+        lines.append("")
 
     preconditions = skill.get("preconditions", [])
     start_context = skill.get("start_context", {})
