@@ -20,6 +20,27 @@
         "evidence": {"type": "string"}
       }
     },
+    "execution_strategy": {
+      "type": "object",
+      "required": ["surface", "preferred_tools", "fallback_tools", "notes"],
+      "properties": {
+        "surface": {
+          "enum": ["web_browser", "desktop_app", "hybrid", "terminal", "file_system", "unknown"]
+        },
+        "preferred_tools": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "fallback_tools": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "notes": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
     "inputs": {
       "type": "object",
       "additionalProperties": {

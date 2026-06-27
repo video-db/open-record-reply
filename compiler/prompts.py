@@ -209,6 +209,37 @@ If only an app or page name is visible, use that as the locator/label instead.
 If the starting surface cannot be identified, use kind "unknown" and describe the
 visible screen state in instructions. Do not invent a URL, app name, or path.
 
+## Execution Strategy
+Add an "execution_strategy" object that tells a replaying agent which tool class to
+prefer. This is guidance only, not an automatic replay plan.
+
+Use this shape:
+{
+  "surface": "web_browser" | "desktop_app" | "hybrid" | "terminal" | "file_system" | "unknown",
+  "preferred_tools": ["playwright"],
+  "fallback_tools": ["native_accessibility", "visual_computer_use"],
+  "notes": ["Short durable guidance for tool choice"]
+}
+
+Choose surface using the observed workflow:
+- web_browser: browser page workflows where DOM-visible page controls are the main surface.
+- desktop_app: native desktop apps such as Slack desktop, Finder, system settings, or app windows.
+- hybrid: browser workflow plus OS dialogs, local file pickers, desktop prompts, or native app handoff.
+- terminal: shell or command-line workflow.
+- file_system: file/folder manipulation outside a web app.
+- unknown: insufficient evidence.
+
+Recommended tool guidance:
+- For web_browser, prefer "playwright" or another browser automation tool for page navigation,
+  forms, buttons, and DOM-visible controls. Use native accessibility only for browser chrome,
+  permission prompts, downloads, or OS dialogs.
+- For desktop_app, prefer "native_accessibility". On macOS this means Accessibility API / AX;
+  on Windows this means UI Automation / UIA; on Linux this means AT-SPI/accessibility APIs.
+- For hybrid, prefer browser automation for web-page steps and native accessibility for file
+  pickers, desktop dialogs, and OS-level controls.
+- Use "visual_computer_use" only as a fallback when structured browser/native controls are
+  unavailable or unreliable.
+
 ## Timestamp Format
 recording_ref timestamps MUST be relative seconds from recording start.
 Format: {"start": <relative_seconds>, "end": <relative_seconds>}.

@@ -711,6 +711,10 @@ def _normalize_llm_output(skill: dict, name: str) -> dict:
         skill.get("start_context"),
         skill["preconditions"],
     )
+    skill["execution_strategy"] = _normalize_execution_strategy(
+        skill.get("execution_strategy"),
+        skill["start_context"],
+    )
 
     normalized_steps = []
     for i, raw_step in enumerate(skill.get("steps", []) or []):
@@ -958,6 +962,166 @@ def _normalize_start_context(start_context: object, preconditions: list[str]) ->
     if evidence:
         normalized["evidence"] = evidence
     return normalized
+
+
+def _normalize_execution_strategy(strategy: object, start_context: dict) -> dict:
+    inferred_surface = _surface_from_start_context(start_context)
+    if not isinstance(strategy, dict):
+        return _default_execution_strategy(inferred_surface)
+
+    raw_surface = str(strategy.get("surface") or inferred_surface).strip().lower()
+    surface_aliases = {
+        "web": "web_browser",
+        "browser": "web_browser",
+        "website": "web_browser",
+        "desktop": "desktop_app",
+        "native": "desktop_app",
+        "app": "desktop_app",
+        "application": "desktop_app",
+        "file": "file_system",
+        "filesystem": "file_system",
+        "screen_state": inferred_surface,
+        "workspace": inferred_surface,
+    }
+    surface = surface_aliases.get(raw_surface, raw_surface)
+    allowed_surfaces = {
+        "web_browser",
+        "desktop_app",
+        "hybrid",
+        "terminal",
+        "file_system",
+        "unknown",
+    }
+    if surface not in allowed_surfaces:
+        surface = inferred_surface
+
+    defaults = _default_execution_strategy(surface)
+    preferred_tools = _normalize_tool_list(
+        strategy.get("preferred_tools") or strategy.get("preferred") or strategy.get("tools"),
+        defaults["preferred_tools"],
+    )
+    fallback_tools = _normalize_tool_list(
+        strategy.get("fallback_tools") or strategy.get("fallback"),
+        defaults["fallback_tools"],
+    )
+    notes = _normalize_string_list(strategy.get("notes"), defaults["notes"])
+
+    return {
+        "surface": surface,
+        "preferred_tools": preferred_tools,
+        "fallback_tools": fallback_tools,
+        "notes": notes,
+    }
+
+
+def _surface_from_start_context(start_context: dict) -> str:
+    kind = str((start_context or {}).get("kind") or "unknown").strip().lower()
+    mapping = {
+        "web": "web_browser",
+        "desktop_app": "desktop_app",
+        "terminal": "terminal",
+        "file": "file_system",
+        "workspace": "unknown",
+        "screen_state": "unknown",
+        "unknown": "unknown",
+    }
+    return mapping.get(kind, "unknown")
+
+
+def _default_execution_strategy(surface: str) -> dict:
+    defaults = {
+        "web_browser": {
+            "preferred_tools": ["playwright"],
+            "fallback_tools": ["native_accessibility", "visual_computer_use"],
+            "notes": [
+                "Use browser automation for DOM-visible page navigation, form fields, buttons, and links.",
+                "Use native accessibility or visual computer-use for browser chrome, permission prompts, downloads, and OS dialogs.",
+            ],
+        },
+        "desktop_app": {
+            "preferred_tools": ["native_accessibility"],
+            "fallback_tools": ["visual_computer_use"],
+            "notes": [
+                "Use platform-native accessibility controls for desktop app windows and OS UI.",
+                "Use macOS Accessibility API / AX on macOS, UI Automation / UIA on Windows, and AT-SPI/accessibility APIs on Linux.",
+            ],
+        },
+        "hybrid": {
+            "preferred_tools": ["playwright", "native_accessibility"],
+            "fallback_tools": ["visual_computer_use"],
+            "notes": [
+                "Use browser automation for web-page steps and native accessibility for file pickers, desktop dialogs, and OS-level controls.",
+            ],
+        },
+        "terminal": {
+            "preferred_tools": ["terminal"],
+            "fallback_tools": ["native_accessibility"],
+            "notes": [
+                "Use shell commands for terminal workflows and verify command output before continuing.",
+            ],
+        },
+        "file_system": {
+            "preferred_tools": ["file_system"],
+            "fallback_tools": ["native_accessibility", "visual_computer_use"],
+            "notes": [
+                "Use file-system operations for direct file changes and native accessibility for file pickers or Finder/Explorer dialogs.",
+            ],
+        },
+        "unknown": {
+            "preferred_tools": ["native_accessibility"],
+            "fallback_tools": ["visual_computer_use"],
+            "notes": [
+                "Start with structured native accessibility when available, then fall back to visual computer-use if the surface cannot be identified.",
+            ],
+        },
+    }
+    selected = defaults.get(surface, defaults["unknown"])
+    return {
+        "surface": surface if surface in defaults else "unknown",
+        "preferred_tools": list(selected["preferred_tools"]),
+        "fallback_tools": list(selected["fallback_tools"]),
+        "notes": list(selected["notes"]),
+    }
+
+
+def _normalize_tool_list(value: object, fallback: list[str]) -> list[str]:
+    normalized = _normalize_string_list(value, fallback)
+    aliases = {
+        "browser": "playwright",
+        "browser_automation": "playwright",
+        "computer_use": "visual_computer_use",
+        "computer-use": "visual_computer_use",
+        "accessibility": "native_accessibility",
+        "ax": "native_accessibility",
+        "uia": "native_accessibility",
+        "ui_automation": "native_accessibility",
+    }
+    result = []
+    for item in normalized:
+        key = re.sub(r"[^a-z0-9]+", "_", item.lower()).strip("_")
+        result.append(aliases.get(key, key))
+    return _dedupe_preserve_order(result) or list(fallback)
+
+
+def _normalize_string_list(value: object, fallback: list[str]) -> list[str]:
+    if isinstance(value, str):
+        items = [value]
+    elif isinstance(value, list):
+        items = value
+    else:
+        return list(fallback)
+    cleaned = [str(item).strip() for item in items if str(item).strip()]
+    return _dedupe_preserve_order(cleaned) or list(fallback)
+
+
+def _dedupe_preserve_order(items: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
 
 
 def _redact_sensitive_value(value: object) -> object:

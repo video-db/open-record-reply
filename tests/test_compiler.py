@@ -12,6 +12,7 @@ from compiler.compiler import (
     _ground_steps_in_matched_events,
     _match_events_to_scenes,
     _normalize_llm_output,
+    _normalize_execution_strategy,
     _trim_events_to_effective_start,
     _trim_events_to_effective_window,
 )
@@ -108,6 +109,58 @@ class TestNormalizeLlmOutput:
             "instructions": "Open the upload dialog before running the steps.",
             "evidence": "The recording shows YouTube Studio.",
         }
+        assert result["execution_strategy"]["surface"] == "web_browser"
+        assert "playwright" in result["execution_strategy"]["preferred_tools"]
+
+    def test_infers_desktop_execution_strategy(self):
+        raw = {
+            "start_context": {
+                "kind": "desktop_app",
+                "label": "Slack desktop",
+                "instructions": "Slack is open to the target channel.",
+            },
+            "steps": [],
+        }
+
+        result = _normalize_llm_output(raw, "test")
+
+        assert result["execution_strategy"]["surface"] == "desktop_app"
+        assert result["execution_strategy"]["preferred_tools"] == ["native_accessibility"]
+        assert any("UI Automation" in note for note in result["execution_strategy"]["notes"])
+
+    def test_normalizes_explicit_hybrid_execution_strategy(self):
+        raw = {
+            "start_context": {
+                "kind": "web",
+                "label": "YouTube Studio",
+                "instructions": "YouTube Studio upload flow is open.",
+            },
+            "execution_strategy": {
+                "surface": "hybrid",
+                "preferred_tools": ["browser automation", "AX"],
+                "fallback_tools": ["computer-use", "computer-use"],
+                "notes": ["Use browser controls for web page steps."],
+            },
+            "steps": [],
+        }
+
+        result = _normalize_llm_output(raw, "test")
+
+        assert result["execution_strategy"] == {
+            "surface": "hybrid",
+            "preferred_tools": ["playwright", "native_accessibility"],
+            "fallback_tools": ["visual_computer_use"],
+            "notes": ["Use browser controls for web page steps."],
+        }
+
+    def test_execution_strategy_falls_back_for_invalid_values(self):
+        strategy = _normalize_execution_strategy(
+            {"surface": "not-real", "preferred_tools": [], "fallback_tools": []},
+            {"kind": "terminal"},
+        )
+
+        assert strategy["surface"] == "terminal"
+        assert strategy["preferred_tools"] == ["terminal"]
 
     def test_preserves_existing_fields(self):
         raw = {
