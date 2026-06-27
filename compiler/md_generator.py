@@ -11,6 +11,7 @@ import re
 
 from config import LLM_MODEL
 from state import state
+from compiler.tool_manifest import load_tool_manifest, surface_tool_guidance, tool_details
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,7 @@ async def generate_skill_md(skill: dict) -> str:
         content = _strip_code_fences(content)
         content = _clean_mojibake(content)
         content = _validate_and_clean_md(content, skill)
+        content = _append_execution_guidance_section(content, skill)
         content = _append_self_improvement_section(content)
         return content
     except Exception as e:
@@ -157,6 +159,7 @@ def _extract_skill_data(skill: dict) -> dict:
         "name": skill.get("name", ""),
         "description": skill.get("description", ""),
         "start_context": skill.get("start_context", {}),
+        "execution_strategy": skill.get("execution_strategy", {}),
         "preconditions": skill.get("preconditions", []),
         "inputs": inputs_for_prompt,
         "steps": steps_for_prompt,
@@ -201,6 +204,43 @@ def _validate_and_clean_md(content: str, skill: dict) -> str:
     content = re.sub(r'\(no scene match\)', '', content, flags=re.IGNORECASE)
     content = re.sub(r'\n{3,}', '\n\n', content)
     return content.strip() + "\n"
+
+
+def _append_execution_guidance_section(content: str, skill: dict) -> str:
+    cleaned = content.strip()
+    if re.search(r"^## Execution Guidance\s*$", cleaned, flags=re.MULTILINE):
+        return cleaned + "\n"
+
+    strategy = skill.get("execution_strategy") if isinstance(skill, dict) else {}
+    if not isinstance(strategy, dict):
+        strategy = {}
+    surface = str(strategy.get("surface") or "unknown").strip() or "unknown"
+
+    manifest = load_tool_manifest()
+    manifest_guidance = surface_tool_guidance(surface, manifest)
+    preferred_tools = _string_list(strategy.get("preferred_tools")) or manifest_guidance["preferred_tools"]
+    fallback_tools = _string_list(strategy.get("fallback_tools")) or manifest_guidance["fallback_tools"]
+    notes = _string_list(strategy.get("notes")) or manifest_guidance["guidance"]
+    details = tool_details(_dedupe(preferred_tools + fallback_tools), manifest)
+
+    lines = ["## Execution Guidance"]
+    lines.append(f"- Surface: `{manifest_guidance['surface']}`.")
+    if preferred_tools:
+        lines.append(f"- Preferred tool path: {_tool_names_sentence(preferred_tools)}.")
+    if fallback_tools:
+        lines.append(f"- Fallback tool path: {_tool_names_sentence(fallback_tools)}.")
+    for note in notes:
+        lines.append(f"- {note}")
+    lines.append("- For desktop/native steps, choose the platform-native accessibility layer: macOS Accessibility API / AX, Windows UI Automation / UIA, or Linux AT-SPI/accessibility APIs.")
+    lines.append("- For browser steps, prefer Playwright or browser automation for DOM-visible page controls; use native accessibility or visual computer-use for OS dialogs, file pickers, browser chrome, and permission prompts.")
+    lines.append("- Treat these as recommended setup tools for replay, not optional afterthoughts.")
+    lines.append("- Do not inspect local app storage, cookies, or tokens unless the user explicitly provides API credentials for that path.")
+    if details:
+        setup_names = [detail.get("display_name") or detail["name"] for detail in details if detail.get("recommended_setup", True)]
+        if setup_names:
+            lines.append(f"- Recommended setup before replay: {', '.join(setup_names)}.")
+
+    return f"{cleaned}\n\n" + "\n".join(lines).strip() + "\n"
 
 
 SELF_IMPROVEMENT_SECTION = """## Continuous Improvement
@@ -322,7 +362,29 @@ def _template_fallback(skill: dict) -> str:
         lines.append("")
 
     lines.append("")
-    return _append_self_improvement_section("\n".join(lines))
+    return _append_self_improvement_section(
+        _append_execution_guidance_section("\n".join(lines), skill)
+    )
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+
+def _tool_names_sentence(tool_names: list[str]) -> str:
+    return ", ".join(f"`{name}`" for name in tool_names)
 
 
 def _build_element_description(vctx: str, expected: str, step: dict, idx: int, total: int) -> str:
