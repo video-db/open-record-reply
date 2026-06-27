@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "tools": {
+    "native_accessibility": {
+      "display_name": "Native accessibility controls",
+      "recommended_setup": true,
+      "use_when": "Visible app replay across desktop apps, browser windows, OS UI, file pickers, browser chrome, and permission prompts.",
+      "platforms": {
+        "macos": "Accessibility API / AX, System Events, osascript, Finder clipboard, and screencapture",
+        "windows": "UI Automation / UIA",
+        "linux": "AT-SPI/accessibility APIs"
+      }
+    },
+    "terminal": {
+      "display_name": "Terminal or shell execution",
+      "recommended_setup": true,
+      "use_when": "Command-line workflows where shell commands and their output are the primary interface."
+    },
+    "file_system": {
+      "display_name": "File-system operations",
+      "recommended_setup": true,
+      "use_when": "Direct file and folder operations that do not require interacting with a visible application."
+    },
+    "visual_computer_use": {
+      "display_name": "Visual computer-use",
+      "recommended_setup": true,
+      "use_when": "Fallback for visible desktop interactions when native accessibility cannot reliably address the control.",
+      "avoid_when": "A native accessibility or system command path can perform the same action."
+    }
+  },
+  "surfaces": {
+    "web_browser": {
+      "preferred_tools": ["native_accessibility"],
+      "fallback_tools": ["visual_computer_use"],
+      "guidance": [
+        "Replay the recorded visible browser app directly with native desktop automation; do not switch to another browser or app unless the user approves.",
+        "On macOS, use system commands such as osascript/System Events, AX inspection, Finder clipboard file paste, keyboard shortcuts, screencapture, and visual checks against the existing browser window.",
+        "Do not use any separate browser automation session for normal replay."
+      ]
+    },
+    "desktop_app": {
+      "preferred_tools": ["native_accessibility"],
+      "fallback_tools": ["visual_computer_use"],
+      "guidance": [
+        "Prefer platform-native accessibility controls for desktop app windows and OS UI.",
+        "On macOS use Accessibility API / AX; on Windows use UI Automation / UIA; on Linux use AT-SPI/accessibility APIs."
+      ]
+    },
+    "hybrid": {
+      "preferred_tools": ["native_accessibility"],
+      "fallback_tools": ["visual_computer_use"],
+      "guidance": [
+        "Replay the recorded visible app/browser directly with native desktop automation; do not switch to another app or browser unless the user approves.",
+        "Use native accessibility across browser, desktop, file picker, browser chrome, and OS-dialog steps.",
+        "On macOS, use osascript/System Events, AX inspection, Finder clipboard file paste, keyboard shortcuts, screencapture, and visual checks for browser plus OS-dialog workflows."
+      ]
+    },
+    "terminal": {
+      "preferred_tools": ["terminal"],
+      "fallback_tools": ["native_accessibility"],
+      "guidance": [
+        "Use shell commands for terminal workflows and verify command output before continuing."
+      ]
+    },
+    "file_system": {
+      "preferred_tools": ["file_system"],
+      "fallback_tools": ["native_accessibility", "visual_computer_use"],
+      "guidance": [
+        "Use file-system operations for direct file changes.",
+        "Use native accessibility for file pickers or Finder/Explorer dialogs."
+      ]
+    },
+    "unknown": {
+      "preferred_tools": ["native_accessibility"],
+      "fallback_tools": ["visual_computer_use"],
+      "guidance": [
+        "Start with structured native accessibility when available.",
+        "Fall back to visual computer-use if the surface cannot be identified."
+      ]
+    }
+  }
+}

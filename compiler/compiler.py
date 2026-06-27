@@ -121,6 +121,7 @@ async def compile_skill(video_id: str, name: str) -> dict:
 
     skill_json = _normalize_llm_output(skill_json, name)
     _ground_steps_in_matched_events(skill_json, matched)
+    _attach_recorded_surfaces(skill_json)
     skill_json["video_id"] = video_id
     skill_json["scene_index_id"] = scene_index_id
     skill_json["compiled_at"] = datetime.now(timezone.utc).isoformat()
@@ -139,6 +140,7 @@ async def compile_skill(video_id: str, name: str) -> dict:
         )
         skill_json = _normalize_llm_output(skill_json, name)
         _ground_steps_in_matched_events(skill_json, matched)
+        _attach_recorded_surfaces(skill_json)
         skill_json["video_id"] = video_id
         skill_json["scene_index_id"] = scene_index_id
         skill_json["compiled_at"] = datetime.now(timezone.utc).isoformat()
@@ -246,6 +248,8 @@ async def compile_skill_events_only(name: str) -> dict:
         raise RuntimeError(f"LLM compilation failed after {LLM_MAX_RETRIES} retries")
 
     skill_json = _normalize_llm_output(skill_json, name)
+    _attach_step_surfaces_from_events(skill_json, action_events)
+    _attach_recorded_surfaces(skill_json)
     skill_json["video_id"] = "v_events_only"
     skill_json["scene_index_id"] = ""
     skill_json["compiled_at"] = datetime.now(timezone.utc).isoformat()
@@ -460,6 +464,9 @@ def _ground_steps_in_matched_events(skill_json: dict, matched: list[dict]) -> No
             "recording_ref": recording_ref,
             "visual_context": _best_step_context(old, scene_description, event, action),
         }
+        surface = _normalize_surface(event.get("surface"))
+        if surface:
+            step["surface"] = surface
         if scene_description:
             step["expected_scene"] = scene_description
         if step_value is not None:
@@ -673,7 +680,7 @@ def _build_events_only_prompt(name: str, events: list[dict], metadata: dict) -> 
     events_text = "\n".join(
         json.dumps({"ts": round((e["ts"] - start_ms) / 1000.0, 3),
                      "action": e["action"], "target": e.get("target"),
-                     "value": e.get("value")})
+                     "value": e.get("value"), "surface": e.get("surface")})
         for e in events
     )
     return p.build_user_prompt(
@@ -711,6 +718,13 @@ def _normalize_llm_output(skill: dict, name: str) -> dict:
         skill.get("start_context"),
         skill["preconditions"],
     )
+    skill["execution_strategy"] = _normalize_execution_strategy(
+        skill.get("execution_strategy"),
+        skill["start_context"],
+    )
+    recorded_surface = _normalize_surface(skill.get("recorded_surface"))
+    if recorded_surface:
+        skill["recorded_surface"] = recorded_surface
 
     normalized_steps = []
     for i, raw_step in enumerate(skill.get("steps", []) or []):
@@ -742,9 +756,13 @@ def _normalize_llm_output(skill: dict, name: str) -> dict:
             clean_step["expected_scene"] = str(expected)
         if "value" in step:
             clean_step["value"] = _redact_sensitive_value(step.get("value"))
+        surface = _normalize_surface(step.get("surface"))
+        if surface:
+            clean_step["surface"] = surface
         normalized_steps.append(clean_step)
 
     skill["steps"] = normalized_steps
+    _augment_standalone_inputs(skill)
 
     norm_verification = []
     verifications_sources = []
@@ -780,6 +798,53 @@ def _normalize_llm_output(skill: dict, name: str) -> dict:
     skill["verification"] = norm_verification or _synthesize_verification(skill)
 
     return skill
+
+
+def _augment_standalone_inputs(skill: dict) -> None:
+    """Add generic inputs needed for a standalone skill when the recording implies them."""
+    inputs = skill.setdefault("inputs", {})
+    text = _skill_search_text(skill)
+
+    upload_terms = ("upload", "attach", "file picker", "open button", "choose file", "select file")
+    if any(term in text for term in upload_terms):
+        if "file_path" not in inputs:
+            inputs["file_path"] = {
+                "type": "string",
+                "example": "/path/to/file.ext",
+                "description": "Full local path of the file to upload or attach. Provide this at run time; do not hardcode a recorded path.",
+            }
+
+    conversation_terms = ("channel", "direct message", " dm ", "conversation", "composer", "chat", "message")
+    if any(term in text for term in conversation_terms):
+        if "target_conversation" not in inputs:
+            inputs["target_conversation"] = {
+                "type": "string",
+                "example": "channel, chat, recipient, or conversation name",
+                "description": "Destination channel, direct message, recipient, chat, thread, or conversation where the file/message should be sent.",
+            }
+
+
+def _skill_search_text(skill: dict) -> str:
+    parts = [
+        str(skill.get("name", "")),
+        str(skill.get("description", "")),
+        " ".join(str(item) for item in skill.get("preconditions", []) if item),
+    ]
+    for key, spec in (skill.get("inputs") or {}).items():
+        parts.append(str(key))
+        if isinstance(spec, dict):
+            parts.extend(str(spec.get(field, "")) for field in ("description", "example", "format"))
+    for step in skill.get("steps", []) or []:
+        if not isinstance(step, dict):
+            continue
+        parts.extend(
+            str(step.get(field, ""))
+            for field in ("visual_context", "expected_scene", "value", "action")
+        )
+        target = step.get("target")
+        if isinstance(target, dict):
+            parts.extend(str(target.get(field, "")) for field in ("label", "type"))
+    return " ".join(parts).lower()
 
 
 def _is_generic_verification_check(check: str) -> bool:
@@ -958,6 +1023,269 @@ def _normalize_start_context(start_context: object, preconditions: list[str]) ->
     if evidence:
         normalized["evidence"] = evidence
     return normalized
+
+
+def _attach_step_surfaces_from_events(skill_json: dict, events: list[dict]) -> None:
+    steps = [step for step in skill_json.get("steps", []) if isinstance(step, dict)]
+    action_events = [event for event in events if isinstance(event, dict) and event.get("event") == "action"]
+    for step, event in zip(steps, action_events):
+        surface = _normalize_surface(event.get("surface"))
+        if surface:
+            step["surface"] = surface
+
+
+def _attach_recorded_surfaces(skill_json: dict) -> None:
+    existing = _normalize_surface(skill_json.get("recorded_surface"))
+    if existing:
+        skill_json["recorded_surface"] = existing
+        return
+
+    surfaces = [
+        _normalize_surface(step.get("surface"))
+        for step in skill_json.get("steps", [])
+        if isinstance(step, dict)
+    ]
+    surfaces = [surface for surface in surfaces if surface]
+    if not surfaces:
+        return
+
+    skill_json["recorded_surface"] = _most_common_surface(surfaces)
+
+
+def _most_common_surface(surfaces: list[dict]) -> dict:
+    counts = {}
+    for surface in surfaces:
+        key = (
+            surface.get("platform", ""),
+            surface.get("app_name", ""),
+            surface.get("process_id", 0),
+            surface.get("window_title", ""),
+        )
+        counts[key] = counts.get(key, 0) + 1
+    best_key = max(counts, key=counts.get)
+    for surface in surfaces:
+        key = (
+            surface.get("platform", ""),
+            surface.get("app_name", ""),
+            surface.get("process_id", 0),
+            surface.get("window_title", ""),
+        )
+        if key == best_key:
+            return dict(surface)
+    return dict(surfaces[0])
+
+
+def _normalize_surface(surface: object) -> dict:
+    if not isinstance(surface, dict):
+        return {}
+
+    normalized = {}
+    for key in ("platform", "app_name", "window_title"):
+        value = str(surface.get(key) or "").strip()
+        if value:
+            normalized[key] = value
+
+    try:
+        process_id = int(surface.get("process_id", 0) or 0)
+    except (TypeError, ValueError):
+        process_id = 0
+    if process_id:
+        normalized["process_id"] = process_id
+
+    bounds = _normalize_int_rect(surface.get("window_bounds"))
+    if bounds:
+        normalized["window_bounds"] = bounds
+
+    relative = _normalize_int_point(surface.get("relative_position"))
+    if relative:
+        normalized["relative_position"] = relative
+
+    return normalized
+
+
+def _normalize_int_rect(value: object) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    keys = ("x", "y", "width", "height")
+    try:
+        return {key: int(value[key]) for key in keys if key in value}
+    except (TypeError, ValueError):
+        return {}
+
+
+def _normalize_int_point(value: object) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    try:
+        return {"x": int(value["x"]), "y": int(value["y"])}
+    except (KeyError, TypeError, ValueError):
+        return {}
+
+
+def _normalize_execution_strategy(strategy: object, start_context: dict) -> dict:
+    inferred_surface = _surface_from_start_context(start_context)
+    if not isinstance(strategy, dict):
+        return _default_execution_strategy(inferred_surface)
+
+    raw_surface = str(strategy.get("surface") or inferred_surface).strip().lower()
+    surface_aliases = {
+        "web": "web_browser",
+        "browser": "web_browser",
+        "website": "web_browser",
+        "desktop": "desktop_app",
+        "native": "desktop_app",
+        "app": "desktop_app",
+        "application": "desktop_app",
+        "file": "file_system",
+        "filesystem": "file_system",
+        "screen_state": inferred_surface,
+        "workspace": inferred_surface,
+    }
+    surface = surface_aliases.get(raw_surface, raw_surface)
+    allowed_surfaces = {
+        "web_browser",
+        "desktop_app",
+        "hybrid",
+        "terminal",
+        "file_system",
+        "unknown",
+    }
+    if surface not in allowed_surfaces:
+        surface = inferred_surface
+
+    defaults = _default_execution_strategy(surface)
+    preferred_tools = _normalize_tool_list(
+        strategy.get("preferred_tools") or strategy.get("preferred") or strategy.get("tools"),
+        defaults["preferred_tools"],
+    )
+    fallback_tools = _normalize_tool_list(
+        strategy.get("fallback_tools") or strategy.get("fallback"),
+        defaults["fallback_tools"],
+    )
+    notes = _normalize_string_list(strategy.get("notes"), defaults["notes"])
+
+    return {
+        "surface": surface,
+        "preferred_tools": preferred_tools,
+        "fallback_tools": fallback_tools,
+        "notes": notes,
+    }
+
+
+def _surface_from_start_context(start_context: dict) -> str:
+    kind = str((start_context or {}).get("kind") or "unknown").strip().lower()
+    mapping = {
+        "web": "web_browser",
+        "desktop_app": "desktop_app",
+        "terminal": "terminal",
+        "file": "file_system",
+        "workspace": "unknown",
+        "screen_state": "unknown",
+        "unknown": "unknown",
+    }
+    return mapping.get(kind, "unknown")
+
+
+def _default_execution_strategy(surface: str) -> dict:
+    defaults = {
+        "web_browser": {
+            "preferred_tools": ["native_accessibility"],
+            "fallback_tools": ["visual_computer_use"],
+            "notes": [
+                "Replay the recorded visible browser app directly with native desktop automation; do not switch to another browser or app unless the user approves.",
+                "Use native accessibility and system commands for the existing browser window, with visual computer-use as fallback.",
+                "Do not use any separate browser automation session for normal replay.",
+            ],
+        },
+        "desktop_app": {
+            "preferred_tools": ["native_accessibility"],
+            "fallback_tools": ["visual_computer_use"],
+            "notes": [
+                "Use platform-native accessibility controls for desktop app windows and OS UI.",
+                "Use macOS Accessibility API / AX on macOS, UI Automation / UIA on Windows, and AT-SPI/accessibility APIs on Linux.",
+            ],
+        },
+        "hybrid": {
+            "preferred_tools": ["native_accessibility"],
+            "fallback_tools": ["visual_computer_use"],
+            "notes": [
+                "Replay the recorded visible app/browser directly with native desktop automation; do not switch to another app or browser unless the user approves.",
+                "Use native accessibility across browser, desktop, file picker, and OS-dialog steps.",
+                "On macOS, use osascript/System Events, AX inspection, Finder clipboard file paste, keyboard shortcuts, screencapture, and visual checks for browser plus OS-dialog workflows.",
+            ],
+        },
+        "terminal": {
+            "preferred_tools": ["terminal"],
+            "fallback_tools": ["native_accessibility"],
+            "notes": [
+                "Use shell commands for terminal workflows and verify command output before continuing.",
+            ],
+        },
+        "file_system": {
+            "preferred_tools": ["file_system"],
+            "fallback_tools": ["native_accessibility", "visual_computer_use"],
+            "notes": [
+                "Use file-system operations for direct file changes and native accessibility for file pickers or Finder/Explorer dialogs.",
+            ],
+        },
+        "unknown": {
+            "preferred_tools": ["native_accessibility"],
+            "fallback_tools": ["visual_computer_use"],
+            "notes": [
+                "Start with structured native accessibility when available, then fall back to visual computer-use if the surface cannot be identified.",
+            ],
+        },
+    }
+    selected = defaults.get(surface, defaults["unknown"])
+    return {
+        "surface": surface if surface in defaults else "unknown",
+        "preferred_tools": list(selected["preferred_tools"]),
+        "fallback_tools": list(selected["fallback_tools"]),
+        "notes": list(selected["notes"]),
+    }
+
+
+def _normalize_tool_list(value: object, fallback: list[str]) -> list[str]:
+    normalized = _normalize_string_list(value, fallback)
+    aliases = {
+        "browser": "native_accessibility",
+        "browser_automation": "native_accessibility",
+        "browser_use": "native_accessibility",
+        "cdp": "native_accessibility",
+        "selenium": "native_accessibility",
+        "computer_use": "visual_computer_use",
+        "computer-use": "visual_computer_use",
+        "accessibility": "native_accessibility",
+        "ax": "native_accessibility",
+        "uia": "native_accessibility",
+        "ui_automation": "native_accessibility",
+    }
+    result = []
+    for item in normalized:
+        key = re.sub(r"[^a-z0-9]+", "_", item.lower()).strip("_")
+        result.append(aliases.get(key, key))
+    return _dedupe_preserve_order(result) or list(fallback)
+
+
+def _normalize_string_list(value: object, fallback: list[str]) -> list[str]:
+    if isinstance(value, str):
+        items = [value]
+    elif isinstance(value, list):
+        items = value
+    else:
+        return list(fallback)
+    cleaned = [str(item).strip() for item in items if str(item).strip()]
+    return _dedupe_preserve_order(cleaned) or list(fallback)
+
+
+def _dedupe_preserve_order(items: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
 
 
 def _redact_sensitive_value(value: object) -> object:

@@ -182,6 +182,26 @@ def test_handle_message_execute_type_uses_last_element(monkeypatch):
     assert responses[0]["result"] == {"typed": "hello", "performed": True}
 
 
+def test_surface_from_window_includes_app_window_and_relative_position():
+    win = {
+        "kCGWindowOwnerName": "Safari",
+        "kCGWindowOwnerPID": 123,
+        "kCGWindowName": "Example Page",
+        "kCGWindowBounds": {"X": 100, "Y": 200, "Width": 800, "Height": 600},
+    }
+
+    surface = darwin._surface_from_window(win, 150, 260)
+
+    assert surface == {
+        "platform": "darwin",
+        "app_name": "Safari",
+        "process_id": 123,
+        "window_title": "Example Page",
+        "window_bounds": {"x": 100, "y": 200, "width": 800, "height": 600},
+        "relative_position": {"x": 50, "y": 60},
+    }
+
+
 def test_on_click_emits_click_event(monkeypatch):
     events = []
 
@@ -200,6 +220,33 @@ def test_on_click_emits_click_event(monkeypatch):
     assert events[0]["action"] == "click"
     assert events[0]["target"] == {"type": "AXButton", "label": "Save", "role": "AXButton"}
     assert events[0]["position"] == {"x": 10, "y": 20}
+
+
+def test_on_click_emits_surface_metadata(monkeypatch):
+    events = []
+    surface = {
+        "platform": "darwin",
+        "app_name": "Safari",
+        "process_id": 123,
+        "window_title": "Example Page",
+        "window_bounds": {"x": 100, "y": 200, "width": 800, "height": 600},
+        "relative_position": {"x": 50, "y": 60},
+    }
+
+    monkeypatch.setattr(darwin, "is_recording", True)
+    monkeypatch.setattr(darwin, "_pending_type_target", None)
+    monkeypatch.setattr(darwin, "_pending_value", "")
+    monkeypatch.setattr(darwin, "_pending_action_type", "")
+    monkeypatch.setattr(darwin, "_find_element_at_point", lambda x, y: {
+        "type": "AXButton",
+        "label": "Save",
+        "surface": surface,
+    })
+    monkeypatch.setattr(darwin, "write_event", events.append)
+
+    darwin._on_click(150, 260, darwin.mouse.Button.left, True)
+
+    assert events[0]["surface"] == surface
 
 
 def test_on_press_accumulates_pending_text(monkeypatch):
@@ -221,6 +268,34 @@ def test_on_press_accumulates_pending_text(monkeypatch):
     assert events[0]["action"] == "type"
     assert events[0]["target"] == {"type": "AXTextField", "label": "Search", "role": "AXTextField"}
     assert events[0]["value"] == "hi"
+
+
+def test_on_press_emits_surface_metadata_for_pending_text(monkeypatch):
+    events = []
+    surface = {
+        "platform": "darwin",
+        "app_name": "Slack",
+        "process_id": 456,
+        "window_title": "testing",
+        "window_bounds": {"x": 0, "y": 0, "width": 1200, "height": 900},
+        "relative_position": {"x": 300, "y": 700},
+    }
+
+    monkeypatch.setattr(darwin, "is_recording", True)
+    monkeypatch.setattr(darwin, "_pending_type_target", {
+        "type": "AXTextField",
+        "label": "Message #testing",
+        "surface": surface,
+    })
+    monkeypatch.setattr(darwin, "_pending_value", "")
+    monkeypatch.setattr(darwin, "_pending_action_type", "type")
+    monkeypatch.setattr(darwin, "write_event", events.append)
+
+    darwin._on_press(SimpleNamespace(char="o"))
+    darwin._on_press(SimpleNamespace(char="k"))
+    darwin._on_press(darwin.keyboard.Key.enter)
+
+    assert events[0]["surface"] == surface
 
 
 def test_on_press_falls_back_to_last_unknown_click(monkeypatch):

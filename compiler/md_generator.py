@@ -11,6 +11,7 @@ import re
 
 from config import LLM_MODEL
 from state import state
+from compiler.tool_manifest import load_tool_manifest, surface_tool_guidance, tool_details
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,7 @@ async def generate_skill_md(skill: dict) -> str:
         content = _strip_code_fences(content)
         content = _clean_mojibake(content)
         content = _validate_and_clean_md(content, skill)
+        content = _append_execution_guidance_section(content, skill)
         content = _append_self_improvement_section(content)
         return content
     except Exception as e:
@@ -157,6 +159,8 @@ def _extract_skill_data(skill: dict) -> dict:
         "name": skill.get("name", ""),
         "description": skill.get("description", ""),
         "start_context": skill.get("start_context", {}),
+        "execution_strategy": skill.get("execution_strategy", {}),
+        "recorded_surface": skill.get("recorded_surface", {}),
         "preconditions": skill.get("preconditions", []),
         "inputs": inputs_for_prompt,
         "steps": steps_for_prompt,
@@ -201,6 +205,57 @@ def _validate_and_clean_md(content: str, skill: dict) -> str:
     content = re.sub(r'\(no scene match\)', '', content, flags=re.IGNORECASE)
     content = re.sub(r'\n{3,}', '\n\n', content)
     return content.strip() + "\n"
+
+
+def _append_execution_guidance_section(content: str, skill: dict) -> str:
+    cleaned = content.strip()
+    if re.search(r"^## Execution Guidance\s*$", cleaned, flags=re.MULTILINE):
+        return cleaned + "\n"
+
+    strategy = skill.get("execution_strategy") if isinstance(skill, dict) else {}
+    if not isinstance(strategy, dict):
+        strategy = {}
+    surface = str(strategy.get("surface") or "unknown").strip() or "unknown"
+
+    manifest = load_tool_manifest()
+    manifest_guidance = surface_tool_guidance(surface, manifest)
+    preferred_tools = _string_list(strategy.get("preferred_tools")) or manifest_guidance["preferred_tools"]
+    fallback_tools = _string_list(strategy.get("fallback_tools")) or manifest_guidance["fallback_tools"]
+    notes = _string_list(strategy.get("notes")) or manifest_guidance["guidance"]
+    details = tool_details(_dedupe(preferred_tools + fallback_tools), manifest)
+    recorded_surface = skill.get("recorded_surface") if isinstance(skill, dict) else {}
+
+    lines = ["## Execution Guidance"]
+    lines.append(f"- Surface: `{manifest_guidance['surface']}`.")
+    surface_summary = _recorded_surface_summary(recorded_surface)
+    if surface_summary:
+        lines.append(f"- Recorded surface: {surface_summary}.")
+        lines.append("- Before acting, bring this exact app/window type to the foreground. Do not switch to another app, browser, or native client unless the user approves.")
+    if preferred_tools:
+        lines.append(f"- Preferred tool path: {_tool_names_sentence(preferred_tools)}.")
+    if fallback_tools:
+        lines.append(f"- Fallback tool path: {_tool_names_sentence(fallback_tools)}.")
+    for note in notes:
+        lines.append(f"- {note}")
+    lines.append("- Use native system automation for replay. On macOS, use osascript/System Events, AX inspection, Finder clipboard file paste, keyboard shortcuts, screencapture, and visual checks. On Windows use UI Automation / UIA. On Linux use AT-SPI/accessibility APIs.")
+    lines.append("- For browser steps, control the recorded visible browser app as a desktop app. Keep the user's existing browser, profile, login, extensions, and window state.")
+    lines.append("- Do not use any separate browser automation session for normal replay.")
+    lines.append("- Prefer native accessibility and system commands for the existing app/window; use visual computer-use only when structured controls are unavailable.")
+    lines.append("- Resolve targets by accessibility role, label, value, placeholder, and nearby visual context before using coordinates.")
+    lines.append("- Use recorded relative positions only as a fallback inside the matching app/window, not as absolute screen coordinates.")
+    lines.append("- Verify visible state after navigation, file pickers, submits, sends, deletes, or other high-impact actions before continuing.")
+    lines.append("- Before upload/send/post/delete actions, verify the selected item, attachment preview, target conversation/page, and message text. If verification is unclear, ask the user instead of retrying.")
+    lines.append("- Treat duplicate uploads, sends, posts, deletes, and submissions as high-risk. Do not repeat them unless there is clear evidence the previous attempt did not happen.")
+    lines.append("- Treat these as recommended setup tools for replay, not optional afterthoughts.")
+    lines.append("- Do not inspect local app storage, cookies, or tokens unless the user explicitly provides API credentials for that path.")
+    preferred_names = _tool_display_names(preferred_tools, details)
+    fallback_names = _tool_display_names(fallback_tools, details)
+    if preferred_names:
+        lines.append(f"- Preferred setup before replay: {', '.join(preferred_names)}.")
+    if fallback_names:
+        lines.append(f"- Fallback setup before replay: {', '.join(fallback_names)}.")
+
+    return f"{cleaned}\n\n" + "\n".join(lines).strip() + "\n"
 
 
 SELF_IMPROVEMENT_SECTION = """## Continuous Improvement
@@ -322,7 +377,55 @@ def _template_fallback(skill: dict) -> str:
         lines.append("")
 
     lines.append("")
-    return _append_self_improvement_section("\n".join(lines))
+    return _append_self_improvement_section(
+        _append_execution_guidance_section("\n".join(lines), skill)
+    )
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+
+def _tool_names_sentence(tool_names: list[str]) -> str:
+    return ", ".join(f"`{name}`" for name in tool_names)
+
+
+def _tool_display_names(tool_names: list[str], details: list[dict]) -> list[str]:
+    detail_by_name = {detail.get("name"): detail for detail in details}
+    names = []
+    for tool_name in tool_names:
+        detail = detail_by_name.get(tool_name, {})
+        if detail.get("recommended_setup", True):
+            names.append(detail.get("display_name") or tool_name.replace("_", " "))
+    return names
+
+
+def _recorded_surface_summary(surface: object) -> str:
+    if not isinstance(surface, dict):
+        return ""
+    parts = []
+    app_name = str(surface.get("app_name") or "").strip()
+    if app_name:
+        parts.append(app_name)
+    window_title = str(surface.get("window_title") or "").strip()
+    if window_title:
+        parts.append(f'window "{window_title}"')
+    platform = str(surface.get("platform") or "").strip()
+    if platform:
+        parts.append(f"on {platform}")
+    return ", ".join(parts)
 
 
 def _build_element_description(vctx: str, expected: str, step: dict, idx: int, total: int) -> str:

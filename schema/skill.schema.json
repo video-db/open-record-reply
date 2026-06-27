@@ -20,6 +20,52 @@
         "evidence": {"type": "string"}
       }
     },
+    "execution_strategy": {
+      "type": "object",
+      "required": ["surface", "preferred_tools", "fallback_tools", "notes"],
+      "properties": {
+        "surface": {
+          "enum": ["web_browser", "desktop_app", "hybrid", "terminal", "file_system", "unknown"]
+        },
+        "preferred_tools": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "fallback_tools": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "notes": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "recorded_surface": {
+      "type": "object",
+      "properties": {
+        "platform": {"type": "string"},
+        "app_name": {"type": "string"},
+        "process_id": {"type": "integer"},
+        "window_title": {"type": "string"},
+        "window_bounds": {
+          "type": "object",
+          "properties": {
+            "x": {"type": "integer"},
+            "y": {"type": "integer"},
+            "width": {"type": "integer"},
+            "height": {"type": "integer"}
+          }
+        },
+        "relative_position": {
+          "type": "object",
+          "properties": {
+            "x": {"type": "integer"},
+            "y": {"type": "integer"}
+          }
+        }
+      }
+    },
     "inputs": {
       "type": "object",
       "additionalProperties": {
@@ -51,6 +97,17 @@
           },
           "value": {"type": ["string", "null"]},
           "visual_context": {"type": "string"},
+          "surface": {
+            "type": "object",
+            "properties": {
+              "platform": {"type": "string"},
+              "app_name": {"type": "string"},
+              "process_id": {"type": "integer"},
+              "window_title": {"type": "string"},
+              "window_bounds": {"type": "object"},
+              "relative_position": {"type": "object"}
+            }
+          },
           "recording_ref": {
             "type": "object",
             "required": ["start", "end"],

@@ -7,8 +7,26 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from capture.recorder import _get_ax_binary_path, _poll_export
+from capture.recorder import _get_ax_binary_path, _operator_recording_guidance, _poll_export
 from capture.ax_client import AxClient
+
+
+class TestOperatorRecordingGuidance:
+    def test_tells_agent_to_wait_for_human_operator(self):
+        result = _operator_recording_guidance(5)
+
+        assert "recording is active" in result["next_step"]
+        assert "5-second lead-in" in result["next_step"]
+        assert "wait until they say stop" in result["next_step"]
+        assert any("human-in-the-loop" in item for item in result["operator_instructions"])
+        assert any("do not inspect the repo" in item for item in result["operator_instructions"])
+        assert any("do not" in item and "drive the browser" in item for item in result["operator_instructions"])
+        assert any("compile_skill_tool" in item for item in result["operator_instructions"])
+
+    def test_zero_lead_in_says_begin_now(self):
+        result = _operator_recording_guidance(0)
+
+        assert "manually now" in result["next_step"]
 
 
 class TestGetAxBinaryPath:

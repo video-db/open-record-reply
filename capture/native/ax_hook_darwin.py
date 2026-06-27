@@ -226,6 +226,31 @@ def _window_at_point(x, y):
     return candidates[0][1] if candidates else None
 
 
+def _surface_from_window(win, x=None, y=None):
+    if not win:
+        return None
+    bounds = win.get("kCGWindowBounds", {}) or {}
+    wx = int(bounds.get("X", 0))
+    wy = int(bounds.get("Y", 0))
+    ww = int(bounds.get("Width", 0))
+    wh = int(bounds.get("Height", 0))
+    surface = {
+        "platform": "darwin",
+        "app_name": _coerce_text(win.get("kCGWindowOwnerName", "")).strip(),
+        "process_id": int(win.get("kCGWindowOwnerPID", 0) or 0),
+        "window_title": _coerce_text(win.get("kCGWindowName", "")).strip(),
+        "window_bounds": {"x": wx, "y": wy, "width": ww, "height": wh},
+    }
+    if x is not None and y is not None:
+        surface["relative_position"] = {"x": int(x - wx), "y": int(y - wy)}
+    return surface
+
+
+def _event_surface_from_info(el_info):
+    surface = (el_info or {}).get("surface")
+    return dict(surface) if isinstance(surface, dict) else None
+
+
 def _ax_element_to_info(element, fallback_x, fallback_y):
     AX = _get_ax_module()
     if AX is None:
@@ -297,7 +322,10 @@ def _try_get_element_via_accessibility(x, y):
     element = _copy_element_at_position(app, x, y)
     if element is None:
         return None
-    return _ax_element_to_info(element, x, y)
+    info = _ax_element_to_info(element, x, y)
+    if info is not None:
+        info["surface"] = _surface_from_window(win, x, y)
+    return info
 
 
 def _try_get_element_via_quartz(x, y):
@@ -317,6 +345,7 @@ def _try_get_element_via_quartz(x, y):
             "y": int(wy),
             "width": int(ww),
             "height": int(wh),
+            "surface": _surface_from_window(win, x, y),
         }
     return None
 
@@ -336,9 +365,11 @@ def _find_element_at_point(x, y):
             "height": result["height"],
             "label": result["label"],
             "type": "AXButton",
+            "surface": result.get("surface"),
         }
 
-    return {"x": x, "y": y, "width": 120, "height": 30, "label": "", "type": "AXButton"}
+    surface = _surface_from_window(_window_at_point(x, y), x, y)
+    return {"x": x, "y": y, "width": 120, "height": 30, "label": "", "type": "AXButton", "surface": surface}
 
 
 def _role_to_ax_type(role, default="AXButton"):
@@ -579,6 +610,9 @@ def _finalize_pending(ts=None):
         "target": target,
         "value": _pending_value.strip(),
     }
+    surface = _event_surface_from_info(_pending_type_target)
+    if surface:
+        evt["surface"] = surface
     write_event(evt)
 
     _pending_type_target = None
@@ -624,6 +658,9 @@ def _on_click(x, y, button, pressed):
             "target": _target_from_info(el_info),
             "position": {"x": x, "y": y},
         }
+        surface = _event_surface_from_info(el_info)
+        if surface:
+            evt["surface"] = surface
         write_event(evt)
 
 

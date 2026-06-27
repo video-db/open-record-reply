@@ -154,6 +154,23 @@ FALLBACK (when recording ends before confirmation):
 For each input, provide: type ("string", "number", "enum"), optional "format" (e.g. "YYYY-MM-DD"), and "example" from the recording. For enum types, include "values" array.
 Also include a "description" field for each input — a short phrase describing where this field appears on screen and what format it expects (e.g., "The date field in the top section of the form, grey label"). This description will be used to generate natural-language skill instructions.
 
+## Standalone Skill Inputs
+The generated skill must be usable from SKILL.md alone. Prefer reusable user-provided
+inputs over recorded literals.
+
+- For file upload or attachment workflows, include `file_path` as a string input.
+  It represents the full local path supplied by the user at run time. Do not
+  hardcode a recorded local path in the skill. You may also include `file_name`
+  only when the visible filename is useful for verification.
+- For chat, messaging, collaboration, or social-posting workflows, include
+  `target_conversation` as a string input when the destination channel, DM, thread,
+  recipient, workspace, or conversation can vary.
+- For user-authored message text, prefer a single reusable `message` or
+  `confirmation_message` input instead of splitting one message into recording-specific
+  fragments unless the UI truly has multiple fields.
+- Preserve fixed UI labels such as "Upload from your computer" as enum options or step
+  instructions, not as hardcoded destination/file inputs.
+
 ## Task-Level Understanding
 Before writing steps, look at the FULL event sequence AND scene descriptions to infer:
 - WHAT was the user trying to accomplish? (e.g., "Search YouTube and play a specific song")
@@ -208,6 +225,39 @@ If a URL is visible or strongly implied, put it in locator and use kind "web".
 If only an app or page name is visible, use that as the locator/label instead.
 If the starting surface cannot be identified, use kind "unknown" and describe the
 visible screen state in instructions. Do not invent a URL, app name, or path.
+
+## Execution Strategy
+Add an "execution_strategy" object that tells a replaying agent which tool class to
+prefer. This is guidance only, not an automatic replay plan.
+
+Use this shape:
+{
+  "surface": "web_browser" | "desktop_app" | "hybrid" | "terminal" | "file_system" | "unknown",
+  "preferred_tools": ["native_accessibility"],
+  "fallback_tools": ["visual_computer_use"],
+  "notes": ["Short durable guidance for tool choice"]
+}
+
+Choose surface using the observed workflow:
+- web_browser: browser page workflows where DOM-visible page controls are the main surface.
+- desktop_app: native desktop apps such as Slack desktop, Finder, system settings, or app windows.
+- hybrid: browser workflow plus OS dialogs, local file pickers, desktop prompts, or native app handoff.
+- terminal: shell or command-line workflow.
+- file_system: file/folder manipulation outside a web app.
+- unknown: insufficient evidence.
+
+Recommended tool guidance:
+- For web_browser, prefer "native_accessibility" against the recorded visible browser app.
+  Keep Safari, Chrome, Brave, Edge, existing logins, extensions, and profile state aligned
+  by controlling the same visible app with platform-native/system automation. Do not use
+  any separate browser automation session for normal replay.
+- For desktop_app, prefer "native_accessibility". On macOS this means Accessibility API / AX;
+  on Windows this means UI Automation / UIA; on Linux this means AT-SPI/accessibility APIs.
+- For hybrid, prefer "native_accessibility" across browser, desktop, file picker, and OS-dialog
+  steps. On macOS, use osascript/System Events, AX inspection, Finder clipboard file paste,
+  keyboard shortcuts, screencapture, and visual checks for browser plus OS-dialog workflows.
+- Use "visual_computer_use" only as a fallback when structured browser/native controls are
+  unavailable or unreliable.
 
 ## Timestamp Format
 recording_ref timestamps MUST be relative seconds from recording start.
