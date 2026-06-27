@@ -7,6 +7,13 @@ An MCP server for recording desktop workflows and generating reusable skill file
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/) package manager
 - A [VideoDB](https://videodb.io) API key
+- Recommended for browser workflow replay: Playwright or an equivalent browser
+  automation tool/MCP.
+- Recommended for desktop workflow replay: native accessibility permissions and
+  tooling for the current OS.
+  - macOS: Accessibility API / AX through PyObjC.
+  - Windows: UI Automation / UIA through `uiautomation`.
+  - Linux: AT-SPI/accessibility APIs where available.
 
 ## Setup
 
@@ -16,13 +23,29 @@ An MCP server for recording desktop workflows and generating reusable skill file
 uv sync
 ```
 
-### 2. Create `.env`
+### 2. Set up recommended replay tooling
+
+For browser-based workflows, configure Playwright or your agent's browser
+automation MCP/tool before replaying generated skills. Browser automation is the
+recommended path for DOM-visible page navigation, forms, buttons, and links.
+
+For desktop/native workflows, enable the platform accessibility layer before
+recording or replaying. Use macOS Accessibility API / AX, Windows UI Automation /
+UIA, or Linux AT-SPI/accessibility APIs depending on the host OS. Visual
+computer-use should be treated as a fallback when structured controls are not
+available.
+
+Hybrid workflows should use browser automation for web-page steps and native
+accessibility for OS file pickers, permission prompts, browser chrome, and
+desktop dialogs.
+
+### 3. Create `.env`
 
 ```
 VIDEODB_API_KEY=sk-your_api_key_here
 ```
 
-### 3. Configure your MCP client
+### 4. Configure your MCP client
 
 **Claude Desktop** / **VS Code** — add to your MCP config:
 
@@ -38,7 +61,7 @@ VIDEODB_API_KEY=sk-your_api_key_here
 }
 ```
 
-### 4. Restart your client
+### 5. Restart your client
 
 Three tools should appear:
 
@@ -70,6 +93,18 @@ events so the generated skill does not include the operator returning to the
 terminal, browser, or chat window.
 
 Compiled skills land in `~/.mcp-videodb/skills/<name>/SKILL.json` and `SKILL.md`.
+Every generated `SKILL.json` includes an `execution_strategy` describing whether
+the workflow is browser, desktop, hybrid, terminal, file-system, or unknown. This
+is guidance for the replaying agent, not a replay orchestrator.
+Every generated `SKILL.md` includes an execution-guidance section that tells the
+agent which recommended tool path to use:
+
+- Browser workflows prefer Playwright/browser automation.
+- Desktop workflows prefer native accessibility controls.
+- Hybrid workflows use browser automation for web steps and native accessibility
+  for OS dialogs, file pickers, browser chrome, and desktop handoffs.
+- Visual computer-use is the fallback when structured controls are unavailable.
+
 Every generated `SKILL.md` includes a short continuous-improvement section. It
 instructs agents to finish the user's task first, then update the skill only with
 durable learnings such as missing inputs, safer fallbacks, clearer start checks,
